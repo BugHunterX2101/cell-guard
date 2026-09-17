@@ -40,7 +40,7 @@
   font-size: 100%;
   font-synthesis: none;
   color: var(--ink);
-  background: var(--panel-2);
+  background: var(--paper);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -115,7 +115,6 @@ button:disabled { cursor: not-allowed; }
   margin: 0 auto;
   min-height: 100vh;
   background: var(--paper);
-  border-inline: 1px solid var(--rule);
   display: flex;
   flex-direction: column;
 }
@@ -150,6 +149,17 @@ button:disabled { cursor: not-allowed; }
   min-height: 3.5rem;
   border-bottom: 1px solid var(--rule);
 }
+
+/* The mark is the same glyph as the favicon — an outlined gate with a red core
+   — so the browser tab and the header read as one identity. */
+.brand {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.brand-mark { flex: none; display: block; color: var(--ink); }
 
 .wordmark {
   font-size: var(--text-base);
@@ -279,7 +289,9 @@ button:disabled { cursor: not-allowed; }
 textarea {
   border: 0;
   background: transparent;
-  resize: vertical;
+  /* No resize grip: the note field already flexes to fill its panel and the
+     composer is a fixed height, so the corner handle was pure visual noise. */
+  resize: none;
   outline-offset: -3px;
 }
 
@@ -590,7 +602,7 @@ kbd {
     row-gap: 0.35rem;
     padding-block: 0.6rem;
   }
-  .wordmark { grid-area: brand; align-self: center; }
+  .brand { grid-area: brand; align-self: center; }
   .mode-chip { grid-area: mode; margin-left: 0; }
   .claim { grid-area: claim; max-width: none; font-size: var(--text-md); }
   .workspace { grid-template-columns: 1fr; }
@@ -604,7 +616,6 @@ kbd {
   .composer button { border-left: 0; border-top: 1px solid var(--rule); justify-content: center; padding: 0.8rem; }
   .feed { max-height: none; }
   .bubble.user { max-width: 100%; }
-  .app { border-inline: 0; }
   .mode-chip { flex: 1; }
   .panel-bar { flex-wrap: wrap; padding-block: 0.4rem; }
 }

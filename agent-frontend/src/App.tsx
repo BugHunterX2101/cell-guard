@@ -135,7 +135,13 @@ export default function App() {
 
       <div className="app">
         <header className="toolbar">
-          <span className="wordmark" translate="no">CELL·GUARD</span>
+          <span className="brand">
+            <svg className="brand-mark" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+              <rect x="1.25" y="1.25" width="21.5" height="21.5" fill="none" stroke="currentColor" strokeWidth="2.5" />
+              <rect x="8" y="8" width="8" height="8" fill="var(--red)" />
+            </svg>
+            <span className="wordmark" translate="no">CELL·GUARD</span>
+          </span>
           <h1 className="claim">
             Cedar policy checks every tool call before it runs — the model can’t talk past it.
           </h1>
