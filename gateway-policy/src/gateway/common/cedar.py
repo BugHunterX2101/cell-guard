@@ -108,6 +108,8 @@ def build_reason(decision: str, tool_name: str, params: dict) -> str:
     threshold = THRESHOLDS.get(tool_name)
     amount = params.get("amount")
     if decision == "DENY":
+        if isinstance(amount, (int, float)) and amount <= 0:
+            return f"Policy forbids {tool_name} with a non-positive amount (attempted: ${amount})."
         return (
             f"Policy forbids {tool_name} above the ${threshold} threshold "
             f"(attempted amount: ${amount})."

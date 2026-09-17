@@ -7,15 +7,18 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-echo "== 1/3: Cedar schema + policies -> Amazon Verified Permissions =="
+echo "== 1/4: Cedar schema + policies -> Amazon Verified Permissions =="
 python3 scripts/deploy_policies.py
 POLICY_STORE_ID=$(cat .policy-store-id)
 echo "Using policy store: ${POLICY_STORE_ID}"
 
-echo "== 2/3: sam build =="
+echo "== 2/4: ensure the mode parameter exists (created once, never reset by redeploys) =="
+bash scripts/ensure_mode_parameter.sh
+
+echo "== 3/4: sam build =="
 sam build
 
-echo "== 3/3: sam deploy =="
+echo "== 4/4: sam deploy =="
 sam deploy \
   --stack-name cellguard-gateway \
   --parameter-overrides "PolicyStoreId=${POLICY_STORE_ID}" \

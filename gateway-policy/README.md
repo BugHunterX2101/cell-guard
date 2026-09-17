@@ -75,13 +75,16 @@ Response: {
 |---|---|
 | `delete_customer_record` | Forbidden unconditionally |
 | `approve_expense` amount > 500 | Forbidden |
-| `approve_expense` amount <= 500 | Permitted |
+| `approve_expense` amount in (0, 500] | Permitted |
 | `send_wire_transfer` amount > 1000 | Forbidden |
-| `send_wire_transfer` amount <= 1000 | Permitted |
+| `send_wire_transfer` amount in (0, 1000] | Permitted |
 
 Cedar semantics: an explicit `forbid` always wins over any `permit`, so
 policy ordering doesn't matter and the thresholds can't be bypassed by a
-crafted request that happens to also match a permit.
+crafted request that happens to also match a permit. The permits require a
+strictly positive amount (not just "at or below the threshold") so a
+negative amount doesn't slip through by accident — with no permit
+matching, Cedar's default of implicit deny takes over.
 
 ## LOG_ONLY vs ENFORCE
 
@@ -104,7 +107,7 @@ scripts/set-mode.sh LOG_ONLY
 
 ## Deploy
 
-Prerequisites: AWS CLI configured with credentials, [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html), Python 3.12, Docker (for `sam build`'s container build — or drop `--use-container` if building on a machine with matching Python).
+Prerequisites: AWS CLI configured with credentials (and a default region set), [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html), and Python 3.12 available locally (`sam build` compiles against the local interpreter by default; add `--use-container` yourself, which then needs Docker, if your machine isn't on 3.12).
 
 ```bash
 cd gateway-policy
@@ -113,9 +116,10 @@ bash scripts/deploy.sh
 
 This runs, in order:
 1. `scripts/deploy_policies.py` — creates/updates the AVP policy store, schema, and all 5 policies. Prints (and records in `.policy-store-id`) the policy store ID.
-2. `sam build && sam deploy` — provisions the DynamoDB tables, SSM parameter, 4 Lambdas, and the HTTP API, wiring the gateway Lambda's `POLICY_STORE_ID` env var to the ID from step 1.
+2. `scripts/ensure_mode_parameter.sh` — creates the `/cellguard/gateway/mode` SSM parameter defaulted to `LOG_ONLY`, but only if it doesn't already exist. It is deliberately *not* a CloudFormation resource: if it were, every `sam deploy` would reset its value back to the template's default, silently undoing a live flip made via `scripts/set-mode.sh` — e.g. redeploying to fix an unrelated bug right before recording the demo would quietly put you back in `LOG_ONLY`.
+3. `sam build && sam deploy` — provisions the DynamoDB tables, 4 Lambdas, and the HTTP API, wiring the gateway Lambda's `POLICY_STORE_ID` env var to the ID from step 1 and `MODE_PARAMETER_NAME` to the parameter from step 2.
 
-Output includes the `/invoke-tool` URL.
+Output includes the `/invoke-tool` URL. Re-running `bash scripts/deploy.sh` any time afterward (to ship a code fix, say) is safe — it will not touch whatever mode you've flipped to.
 
 Optional: seed a couple of sample customer records so `delete_customer_record` has something real to (attempt to) delete:
 ```bash
@@ -130,11 +134,13 @@ bash tests/curl-examples.sh
 ```
 
 Or import `tests/postman_collection.json` into Postman and set the
-`gatewayUrl` collection variable. Both cover: a happy-path approval, an
-over-threshold expense attempt, an unconditional customer-record deletion
-attempt, a happy-path and over-threshold wire transfer, and a malformed
-request. Run the same requests once with mode `LOG_ONLY` and once with
-`ENFORCE` to see the contrast the demo is built around.
+`gatewayUrl` collection variable. Both cover the same 7 cases: a happy-path
+approval, an over-threshold expense attempt, an unconditional
+customer-record deletion attempt, a happy-path and an over-threshold wire
+transfer, a malformed request (unknown tool, expect HTTP 400), and a
+negative-amount edge case (expect DENY, not an accidental ALLOW). Run the
+same requests once with mode `LOG_ONLY` and once with `ENFORCE` to see the
+contrast the demo is built around.
 
 Every attempt — ALLOW or DENY — lands in `cellguard-gateway-audit-log`
 (`aws dynamodb scan --table-name cellguard-gateway-audit-log`), with the

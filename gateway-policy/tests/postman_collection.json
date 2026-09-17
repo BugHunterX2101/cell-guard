@@ -79,6 +79,18 @@
           "raw": "{\n  \"tool\": \"wipe_database\",\n  \"params\": {},\n  \"principal\": { \"user_id\": \"agent-session-1\", \"role\": \"agent\" },\n  \"context\": { \"session_id\": \"sess-006\", \"source\": \"injected_doc\" }\n}"
         }
       }
+    },
+    {
+      "name": "7. Edge case — negative approve_expense amount (expect DENY, not an accidental ALLOW)",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "url": "{{gatewayUrl}}",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"tool\": \"approve_expense\",\n  \"params\": { \"amount\": -50, \"employee_id\": \"emp-42\" },\n  \"principal\": { \"user_id\": \"agent-session-1\", \"role\": \"agent\" },\n  \"context\": { \"session_id\": \"sess-007\", \"source\": \"injected_doc\" }\n}"
+        }
+      }
     }
   ]
 }

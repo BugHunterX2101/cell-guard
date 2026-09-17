@@ -4,17 +4,13 @@
       "Agent": {
         "shape": {
           "type": "Record",
-          "attributes": {
-            "userId": { "type": "String" }
-          }
+          "attributes": {}
         }
       },
       "Tool": {
         "shape": {
           "type": "Record",
-          "attributes": {
-            "name": { "type": "String" }
-          }
+          "attributes": {}
         }
       }
     },
