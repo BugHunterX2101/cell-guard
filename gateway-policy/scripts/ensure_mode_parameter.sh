@@ -10,6 +10,12 @@
 # the only thing that changes its value after that.
 set -euo pipefail
 
+# On Windows/Git Bash, MSYS rewrites any argument that looks like a leading-
+# slash Unix path (e.g. "/cellguard/...") into a Windows filesystem path
+# before the aws CLI ever sees it — silently corrupting the parameter name.
+# This disables that rewriting; it's a no-op on real Linux/macOS shells.
+export MSYS_NO_PATHCONV=1
+
 PARAM_NAME="/cellguard/gateway/mode"
 
 if aws ssm get-parameter --name "${PARAM_NAME}" >/dev/null 2>&1; then

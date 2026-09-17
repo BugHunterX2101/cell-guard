@@ -6,6 +6,10 @@
 #        scripts/set-mode.sh LOG_ONLY
 set -euo pipefail
 
+# See ensure_mode_parameter.sh for why: Git Bash/MSYS otherwise mangles the
+# leading-slash parameter name into a Windows filesystem path.
+export MSYS_NO_PATHCONV=1
+
 MODE="${1:-}"
 if [[ "${MODE}" != "LOG_ONLY" && "${MODE}" != "ENFORCE" ]]; then
   echo "Usage: $0 [LOG_ONLY|ENFORCE]" >&2

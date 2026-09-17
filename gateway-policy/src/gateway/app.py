@@ -2,8 +2,10 @@
 
 Every tool call from the agent lands here first. This Lambda:
   1. Validates the request against the locked contract.
-  2. Asks Amazon Verified Permissions for a real ALLOW/DENY on the actual
-     parameters attempted (not on anything the agent was told to do).
+  2. Asks the embedded Cedar engine (common/engine.py) for a real ALLOW/DENY
+     on the actual parameters attempted (not on anything the agent was told
+     to do). See engine.py for why this runs embedded rather than via the
+     managed Amazon Verified Permissions service.
   3. In ENFORCE mode, honors that decision — a DENY never reaches the tool.
      In LOG_ONLY mode, the decision is recorded but the tool still runs,
      which is what lets the demo show the same attack succeeding under one
@@ -28,12 +30,10 @@ from common.cedar import (
     build_resource,
     TOOL_ACTIONS,
 )
+from common.engine import authorize
 from common.mode import get_mode
 
-_avp = boto3.client("verifiedpermissions")
 _lambda = boto3.client("lambda")
-
-_POLICY_STORE_ID = os.environ["POLICY_STORE_ID"]
 
 _TOOL_FUNCTION_NAMES = {
     "approve_expense": os.environ["APPROVE_EXPENSE_FUNCTION_NAME"],
@@ -85,9 +85,9 @@ def handler(event, context):
         return _handle(event)
     except Exception as exc:  # noqa: BLE001 - last-resort fail-closed guard
         # A security gateway must fail closed: if anything unexpected blew up
-        # (AVP throttled, a transient AWS error, whatever), the caller still
-        # gets a contract-shaped DENY, never a raw 500 from API Gateway that
-        # the agent/frontend wouldn't know how to parse.
+        # (a transient AWS error invoking a tool, a bug, whatever), the
+        # caller still gets a contract-shaped DENY, never a raw 500 from API
+        # Gateway that the agent/frontend wouldn't know how to parse.
         return _response(500, {"decision": "DENY", "reason": f"Internal gateway error: {exc}"})
 
 
@@ -110,7 +110,7 @@ def _handle(event):
         return _deny("Missing principal.user_id.", status_code=400)
 
     try:
-        avp_context = build_context(tool_name, params, request_context)
+        cedar_context = build_context(tool_name, params, request_context)
     except ValueError as exc:
         return _deny(str(exc), status_code=400)
 
@@ -118,15 +118,7 @@ def _handle(event):
     resource = build_resource(tool_name)
     action = build_action(tool_name)
 
-    avp_response = _avp.is_authorized(
-        policyStoreId=_POLICY_STORE_ID,
-        principal=principal,
-        action=action,
-        resource=resource,
-        context=avp_context,
-    )
-    cedar_decision = avp_response["decision"]
-    determining_policy_ids = [p["policyId"] for p in avp_response.get("determiningPolicies", [])]
+    cedar_decision, determining_policy_ids = authorize(principal, action, resource, cedar_context)
     reason = build_reason(cedar_decision, tool_name, params)
 
     mode = get_mode()

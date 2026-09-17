@@ -1,8 +1,15 @@
 # Cell-Guard — Gateway & Policy (Person B)
 
-Owns: the Cedar schema + policies in Amazon Verified Permissions, the API
-Gateway + gateway Lambda, the 3 tool Lambdas, and the audit log. Fully
-testable with curl/Postman — the agent does not need to be running.
+Owns: the Cedar schema + policies, the API Gateway + gateway Lambda, the 3
+tool Lambdas, and the audit log. Fully testable with curl/Postman — the
+agent does not need to be running.
+
+**Architecture note:** the PRD calls for Cedar policy evaluated via Amazon
+Verified Permissions. This deployment instead runs the same Cedar engine
+**embedded** directly in the gateway Lambda, because Verified Permissions
+is blocked account-wide on the AWS account this was built against — see
+"Why embedded Cedar, not Amazon Verified Permissions" below before
+assuming AVP is in play anywhere in this codebase.
 
 ## Architecture
 
@@ -12,8 +19,10 @@ POST /invoke-tool  (API Gateway HTTP API)
         v
   gateway Lambda  (cellguard-gateway-invoke-tool)
         |
-        |-- verifiedpermissions:IsAuthorized  ---> Amazon Verified Permissions
-        |                                          (Cedar schema + 5 policies)
+        |-- embedded Cedar engine (cedarpy, in-process)
+        |     schema.json + 5 policies, staged into the Lambda's own
+        |     package by scripts/prepare_policies.py, parsed once at
+        |     cold start (common/engine.py)
         |
         |-- reads /cellguard/gateway/mode      ---> SSM Parameter Store
         |                                          (LOG_ONLY | ENFORCE)
@@ -31,18 +40,49 @@ POST /invoke-tool  (API Gateway HTTP API)
 No Lambda in this slice calls another tool Lambda directly, and no Lambda
 holds IAM permission it doesn't use — see the `Policies:` block for each
 function in `template.yaml`. The gateway Lambda's own AWS permissions do not
-grant the risky actions; Cedar's `IsAuthorized` decision is the gate.
+grant the risky actions; the embedded Cedar engine's decision is the gate,
+evaluated in-process with no network call involved at all.
 
-## Why the policy store isn't a CloudFormation resource
+## Why embedded Cedar, not Amazon Verified Permissions
 
-`AWS::VerifiedPermissions::Policy` requires the Cedar statement inlined as a
-template string, which would mean keeping the same policy text in two places
-(the `.cedar` file and the template) and letting them drift. Instead,
-`policies/schema.json` and `policies/policies/*.cedar` are the single source
-of truth, and `scripts/deploy_policies.py` pushes them to AVP directly. This
-is also much faster to iterate on — edit a `.cedar` file, rerun the script,
-no stack update — which mattered given the timeline risk called out in the
-PRD ("Cedar/AVP setup takes longer than expected").
+Every `verifiedpermissions:*` API call — `IsAuthorized`, `CreatePolicyStore`,
+regardless of the specific action, IAM permissions granted, or AWS region
+tried (`us-east-1`, `us-west-2`, `eu-west-1` all identical) — failed with:
+
+```
+AccessDeniedException: The AWS Access Key Id needs a subscription for the service
+```
+
+Unlike every other AWS service used here, that error never names a missing
+IAM action (compare: `"not authorized to perform: dynamodb:ListTables
+because no identity-based policy allows..."` for a normal denial). That
+shape points to a block above the IAM-user level — most likely an AWS
+Organizations Service Control Policy on the hackathon-provisioned sandbox
+account (see https://www.wemakedevs.org/aws/first-commit), not a fixable
+permissions gap. Verified Permissions isn't mentioned anywhere in that
+hackathon's rules, while Cedar itself is explicitly listed as an endorsed
+technology ("Cedar: authorization as policy" under the Build It track).
+
+So: same authorization model, same Cedar policy language, same
+`policies/schema.json` / `policies/policies/*.cedar` files (byte-for-byte
+unchanged, validated against the real Cedar engine both before and after
+this pivot) — just evaluated by the open-source Cedar engine directly
+inside the gateway Lambda (via [`cedarpy`](https://pypi.org/project/cedarpy/),
+the official Python bindings for the same Rust engine AVP itself runs on)
+instead of calling out to the managed service. This also removes a network
+hop from every tool call, which only helps the "keep the gateway check
+fast" NFR, and gives friendlier audit-log entries (`cedarpy` reports which
+`.cedar` file matched, e.g. `03-permit-approve-expense-within-threshold`,
+rather than AVP's opaque `SPEXAMPLEabc123` policy IDs).
+
+If Verified Permissions gets unblocked on your account later, swapping
+back is a small, isolated change: reintroduce a boto3
+`verifiedpermissions.is_authorized` call in `common/engine.py`'s
+`authorize()` function (its signature — principal/action/resource/context
+in, `(decision, determining_policy_ids)` out — doesn't need to change),
+push the schema/policies to a real policy store, and drop the `cedarpy`
+dependency. See git history for the pre-pivot AVP-based version of this
+file if you want the exact original wiring back.
 
 ## The contract (locked — do not change without telling Person A)
 
@@ -57,12 +97,16 @@ Request: {
 Response: {
   "decision": "ALLOW" | "DENY",
   "reason": "string",
-  "result": {...},        // present only if decision is ALLOW
-  "mode": "LOG_ONLY" | "ENFORCE",     // extra, non-breaking
-  "policyDecision": "ALLOW" | "DENY" // extra: what Cedar actually decided,
-                                      // even in LOG_ONLY where it isn't enforced
+  "result": {...},                    // present only if decision is ALLOW
+  "mode": "LOG_ONLY" | "ENFORCE",      // extra, non-breaking
+  "policyDecision": "ALLOW" | "DENY"   // extra: what Cedar actually decided,
+                                       // even in LOG_ONLY where it isn't enforced
 }
 ```
+
+This contract is unchanged by the AVP-to-embedded-Cedar pivot — it's an
+internal implementation swap inside the gateway Lambda. Person A's side
+doesn't need to know or care which way authorization is evaluated.
 
 `params` per tool:
 - `approve_expense`: `{ "amount": number, "employee_id": "string" }`
@@ -86,6 +130,14 @@ strictly positive amount (not just "at or below the threshold") so a
 negative amount doesn't slip through by accident — with no permit
 matching, Cedar's default of implicit deny takes over.
 
+`policies/schema.json` and `policies/policies/*.cedar` are the single
+edited-by-humans source of truth. `scripts/prepare_policies.py` copies them
+into `src/gateway/policies/` (a gitignored build artifact — the gateway
+Lambda's package needs its own copy since SAM's `CodeUri` is a single
+directory boundary) and validates them against the real Cedar engine before
+every build, so a typo in a `.cedar` file fails fast locally instead of
+surfacing as a Lambda cold-start crash after a successful `sam deploy`.
+
 ## LOG_ONLY vs ENFORCE
 
 Mode lives in one SSM parameter (`/cellguard/gateway/mode`), read fresh on
@@ -107,7 +159,15 @@ scripts/set-mode.sh LOG_ONLY
 
 ## Deploy
 
-Prerequisites: AWS CLI configured with credentials (and a default region set), [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html), and Python 3.12 available locally (`sam build` compiles against the local interpreter by default; add `--use-container` yourself, which then needs Docker, if your machine isn't on 3.12).
+Prerequisites:
+- AWS CLI configured with credentials and a default region set
+- [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html)
+- **Docker, running locally.** This is now required (not optional): the
+  gateway Lambda bundles [`cedarpy`](https://pypi.org/project/cedarpy/),
+  which ships a compiled Rust extension. `sam build --use-container`
+  builds it inside a Lambda-like Linux container so the extension matches
+  Lambda's actual runtime platform, regardless of what OS you're
+  developing on (this was built and deployed from Windows).
 
 ```bash
 cd gateway-policy
@@ -115,13 +175,25 @@ bash scripts/deploy.sh
 ```
 
 This runs, in order:
-1. `scripts/deploy_policies.py` — creates/updates the AVP policy store, schema, and all 5 policies. Prints (and records in `.policy-store-id`) the policy store ID.
-2. `scripts/ensure_mode_parameter.sh` — creates the `/cellguard/gateway/mode` SSM parameter defaulted to `LOG_ONLY`, but only if it doesn't already exist. It is deliberately *not* a CloudFormation resource: if it were, every `sam deploy` would reset its value back to the template's default, silently undoing a live flip made via `scripts/set-mode.sh` — e.g. redeploying to fix an unrelated bug right before recording the demo would quietly put you back in `LOG_ONLY`.
-3. `sam build && sam deploy` — provisions the DynamoDB tables, 4 Lambdas, and the HTTP API, wiring the gateway Lambda's `POLICY_STORE_ID` env var to the ID from step 1 and `MODE_PARAMETER_NAME` to the parameter from step 2.
+1. `scripts/prepare_policies.py` — stages `policies/` into the gateway
+   Lambda's package and validates the schema + all 5 policies against the
+   real Cedar engine. Pure local operation, no AWS calls.
+2. `scripts/ensure_mode_parameter.sh` — creates the `/cellguard/gateway/mode`
+   SSM parameter defaulted to `LOG_ONLY`, but only if it doesn't already
+   exist. It is deliberately *not* a CloudFormation resource: if it were,
+   every `sam deploy` would reset its value back to the template's default,
+   silently undoing a live flip made via `scripts/set-mode.sh` — e.g.
+   redeploying to fix an unrelated bug right before recording the demo
+   would quietly put you back in `LOG_ONLY`.
+3. `sam build --use-container && sam deploy` — provisions the DynamoDB
+   tables, 4 Lambdas, and the HTTP API.
 
-Output includes the `/invoke-tool` URL. Re-running `bash scripts/deploy.sh` any time afterward (to ship a code fix, say) is safe — it will not touch whatever mode you've flipped to.
+Output includes the `/invoke-tool` URL. Re-running `bash scripts/deploy.sh`
+any time afterward (to ship a code fix, say) is safe — it will not touch
+whatever mode you've flipped to.
 
-Optional: seed a couple of sample customer records so `delete_customer_record` has something real to (attempt to) delete:
+Optional: seed a couple of sample customer records so `delete_customer_record`
+has something real to (attempt to) delete:
 ```bash
 python3 scripts/seed_data.py
 ```
@@ -158,11 +230,12 @@ itself.
 
 | Function | Permissions |
 |---|---|
-| `cellguard-gateway-invoke-tool` (gateway) | `verifiedpermissions:IsAuthorized` on this policy store only; `lambda:InvokeFunction` on the 3 tool functions only; `dynamodb:PutItem` on the audit table only; `ssm:GetParameter` on the mode parameter only |
+| `cellguard-gateway-invoke-tool` (gateway) | `lambda:InvokeFunction` on the 3 tool functions only; `dynamodb:PutItem` on the audit table only; `ssm:GetParameter` on the mode parameter only |
 | `cellguard-gateway-approve-expense` | `dynamodb:PutItem` on the app-data table only |
 | `cellguard-gateway-delete-customer-record` | `dynamodb:DeleteItem` + `dynamodb:PutItem` on the app-data table only |
 | `cellguard-gateway-send-wire-transfer` | `dynamodb:PutItem` on the app-data table only |
 
 None of the tool Lambdas can be reached except by the gateway Lambda's
 explicit `InvokeFunction` grant — there is no API Gateway route to them
-directly.
+directly. The gateway Lambda needs no AWS-service permission at all for the
+authorization decision itself — it's evaluated in-process.

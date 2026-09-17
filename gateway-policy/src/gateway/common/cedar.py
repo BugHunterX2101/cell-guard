@@ -1,8 +1,10 @@
-"""Shared helpers for building Amazon Verified Permissions IsAuthorized requests.
+"""Shared helpers for building embedded-Cedar authorization requests.
 
-Kept in one place so the gateway Lambda and any future policy-consuming Lambda
-build entity/context shapes the same way the Cedar schema (policies/schema.json)
-expects them.
+Kept in one place so the gateway Lambda builds entity/context shapes the
+same way the Cedar schema (policies/schema.json) expects them. Authorization
+runs via the embedded `cedarpy` engine (see common/engine.py) rather than
+the managed Amazon Verified Permissions service — see engine.py's docstring
+for why.
 """
 
 NAMESPACE = "CellGuard"
@@ -26,7 +28,7 @@ TOOL_ACTIONS = {
 
 # Mirrors the fixed thresholds encoded in policies/policies/*.cedar. Used only
 # to produce a human-readable reason string for the API response and audit
-# log — the actual allow/deny decision always comes from AVP's IsAuthorized,
+# log — the actual allow/deny decision always comes from the Cedar engine,
 # never from this dict.
 THRESHOLDS = {
     "approve_expense": 500,
@@ -34,47 +36,50 @@ THRESHOLDS = {
 }
 
 
-def _attr(value):
-    """Wrap a Python value as an AVP AttributeValue.
+def _coerce(value):
+    """Normalize a Python value for a Cedar context field.
 
     Raises ValueError (not TypeError) on anything unsupported so callers in
     the gateway handler can turn it into a clean 400 response instead of an
     unhandled 500 — a malformed request from the agent should never crash
     the gateway.
+
+    A whole-number float is coerced to int: cedarpy's plain-dict context
+    does NOT auto-coerce floats into a schema-declared Long field — passing
+    120.0 for a Long fails with Decision.NoDecision ("failed to parse
+    schema from request") rather than being treated as 120. Confirmed
+    against the real engine.
     """
     if isinstance(value, bool):
-        return {"boolean": value}
+        return value
     if isinstance(value, int):
-        return {"long": value}
+        return value
     if isinstance(value, float):
         if not value.is_integer():
             raise ValueError(f"Cedar Long context fields must be whole numbers, got {value}")
-        return {"long": int(value)}
+        return int(value)
     if isinstance(value, str):
-        return {"string": value}
+        return value
     raise ValueError(f"Unsupported context attribute type: {type(value)!r}")
 
 
 def build_principal(user_id: str) -> dict:
-    return {"entityType": f"{NAMESPACE}::Agent", "entityId": user_id}
+    return {"type": f"{NAMESPACE}::Agent", "id": user_id}
 
 
 def build_resource(tool_name: str) -> dict:
-    return {"entityType": f"{NAMESPACE}::Tool", "entityId": tool_name}
+    return {"type": f"{NAMESPACE}::Tool", "id": tool_name}
 
 
 def build_action(tool_name: str) -> dict:
-    return {
-        "actionType": f"{NAMESPACE}::Action",
-        "actionId": TOOL_ACTIONS[tool_name]["actionId"],
-    }
+    return {"type": f"{NAMESPACE}::Action", "id": TOOL_ACTIONS[tool_name]["actionId"]}
 
 
 def build_context(tool_name: str, params: dict, request_context: dict) -> dict:
-    """Assemble the AVP contextMap for a tool call from params + request context.
+    """Assemble the Cedar context dict for a tool call from params + request context.
 
     Only the fields the Cedar schema declares for this action are included —
-    passing an undeclared field would fail strict schema validation.
+    passing an undeclared field fails strict schema validation.
     """
     merged = {
         "amount": params.get("amount"),
@@ -85,20 +90,20 @@ def build_context(tool_name: str, params: dict, request_context: dict) -> dict:
         "source": request_context.get("source"),
     }
     fields = TOOL_ACTIONS[tool_name]["context_fields"]
-    context_map = {}
+    context = {}
     for field in fields:
         value = merged.get(field)
         if value is None:
             raise ValueError(f"Missing required field for {tool_name}: {field}")
-        context_map[field] = _attr(value)
-    return {"contextMap": context_map}
+        context[field] = _coerce(value)
+    return context
 
 
 def build_reason(decision: str, tool_name: str, params: dict) -> str:
     """Human-readable explanation of the Cedar decision for the API response.
 
     This text is presentation only — the enforcement decision itself is
-    produced entirely by AVP's IsAuthorized call, never by this function.
+    produced entirely by the embedded Cedar engine, never by this function.
     """
     if tool_name == "delete_customer_record":
         if decision == "DENY":

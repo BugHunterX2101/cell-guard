@@ -2,19 +2,15 @@ AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
 Description: >
   Cell-Guard — Gateway & Policy (Person B's slice).
-  API Gateway (/invoke-tool) -> gateway Lambda -> Amazon Verified Permissions
-  IsAuthorized -> tool Lambdas, with every decision written to an audit log.
-  The Cedar schema/policies themselves are managed out-of-band by
-  scripts/deploy_policies.py (see README) — this template consumes the
-  resulting PolicyStoreId as a parameter rather than owning it, so policy
-  iteration never requires a stack update.
+  API Gateway (/invoke-tool) -> gateway Lambda -> embedded Cedar engine
+  (common/engine.py, via cedarpy) -> tool Lambdas, with every decision
+  written to an audit log. Authorization runs in-process rather than via
+  the managed Amazon Verified Permissions service — see engine.py's
+  docstring for why. The Cedar schema/policies themselves live in
+  policies/ and are staged + validated by scripts/prepare_policies.py
+  before every build (see README).
 
 Parameters:
-  PolicyStoreId:
-    Type: String
-    Description: >
-      Amazon Verified Permissions policy store ID, produced by
-      scripts/deploy_policies.py. Run that script first.
   ModeParameterName:
     Type: String
     Default: /cellguard/gateway/mode
@@ -129,9 +125,11 @@ Resources:
               Resource: !GetAtt AppDataTable.Arn
 
   # ---------------------------------------------------------------------
-  # Gateway Lambda — the only thing allowed to call IsAuthorized, invoke the
-  # tool Lambdas, or write to the audit log. IAM here does not grant the
-  # risky actions themselves; Cedar's decision is what gates them.
+  # Gateway Lambda — the only thing allowed to invoke the tool Lambdas or
+  # write to the audit log. IAM here does not grant the risky actions
+  # themselves; the embedded Cedar engine's decision is what gates them.
+  # (No IsAuthorized IAM grant needed anymore — authorization runs
+  # in-process via common/engine.py, not against a managed AWS service.)
   # ---------------------------------------------------------------------
   GatewayFunction:
     Type: AWS::Serverless::Function
@@ -141,7 +139,6 @@ Resources:
       Handler: app.handler
       Environment:
         Variables:
-          POLICY_STORE_ID: !Ref PolicyStoreId
           MODE_PARAMETER_NAME: !Ref ModeParameterName
           AUDIT_TABLE_NAME: !Ref AuditLogTable
           APPROVE_EXPENSE_FUNCTION_NAME: !Ref ApproveExpenseFunction
@@ -149,10 +146,6 @@ Resources:
           SEND_WIRE_TRANSFER_FUNCTION_NAME: !Ref SendWireTransferFunction
       Policies:
         - Statement:
-            - Sid: IsAuthorizedOnThisPolicyStoreOnly
-              Effect: Allow
-              Action: verifiedpermissions:IsAuthorized
-              Resource: !Sub "arn:${AWS::Partition}:verifiedpermissions:${AWS::Region}:${AWS::AccountId}:policy-store/${PolicyStoreId}"
             - Sid: InvokeOnlyTheThreeToolFunctions
               Effect: Allow
               Action: lambda:InvokeFunction
