@@ -1,0 +1,68 @@
+{
+  "CellGuard": {
+    "entityTypes": {
+      "Agent": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "userId": { "type": "String" }
+          }
+        }
+      },
+      "Tool": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "name": { "type": "String" }
+          }
+        }
+      }
+    },
+    "actions": {
+      "ApproveExpense": {
+        "appliesTo": {
+          "principalTypes": ["Agent"],
+          "resourceTypes": ["Tool"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "amount": { "type": "Long", "required": true },
+              "employeeId": { "type": "String", "required": true },
+              "sessionId": { "type": "String", "required": true },
+              "source": { "type": "String", "required": true }
+            }
+          }
+        }
+      },
+      "DeleteCustomerRecord": {
+        "appliesTo": {
+          "principalTypes": ["Agent"],
+          "resourceTypes": ["Tool"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "customerId": { "type": "String", "required": true },
+              "sessionId": { "type": "String", "required": true },
+              "source": { "type": "String", "required": true }
+            }
+          }
+        }
+      },
+      "SendWireTransfer": {
+        "appliesTo": {
+          "principalTypes": ["Agent"],
+          "resourceTypes": ["Tool"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "amount": { "type": "Long", "required": true },
+              "recipient": { "type": "String", "required": true },
+              "sessionId": { "type": "String", "required": true },
+              "source": { "type": "String", "required": true }
+            }
+          }
+        }
+      }
+    }
+  }
+}
