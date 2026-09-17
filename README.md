@@ -9,6 +9,12 @@ see [`gateway-policy/README.md`](./gateway-policy/README.md#why-embedded-cedar-n
 
 Full context: [`Cell-Guard — Product Requirements Document.pdf`](./Cell-Guard%20%E2%80%94%20Product%20Requirements%20Document.pdf).
 
+**Deployed gateway (Person B's slice):**
+`https://uh8orn4o0d.execute-api.us-east-1.amazonaws.com/prod/invoke-tool`
+— live on AWS (`us-east-1`), verified end-to-end in both `LOG_ONLY` and
+`ENFORCE` mode; see [`gateway-policy/README.md`](./gateway-policy/README.md#test-without-the-agent)
+to exercise it directly.
+
 ## Repo layout
 
 Split along the one real seam in the architecture — the agent doesn't need

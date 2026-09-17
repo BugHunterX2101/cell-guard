@@ -1,0 +1,7 @@
+# Local development/deploy-tooling dependencies — NOT bundled into any
+# Lambda (see src/gateway/requirements.txt for that). Needed to run
+# scripts/prepare_policies.py, which validates the Cedar schema/policies
+# locally before every deploy using the same engine the gateway Lambda
+# embeds. Pinned to the exact same version as src/gateway/requirements.txt
+# so local validation can't silently diverge from what's actually deployed.
+cedarpy==4.12.0

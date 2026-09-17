@@ -11,6 +11,11 @@ is blocked account-wide on the AWS account this was built against — see
 "Why embedded Cedar, not Amazon Verified Permissions" below before
 assuming AVP is in play anywhere in this codebase.
 
+**Live deployment** (`us-east-1`, verified end-to-end in both modes):
+```
+https://uh8orn4o0d.execute-api.us-east-1.amazonaws.com/prod/invoke-tool
+```
+
 ## Architecture
 
 ```
@@ -168,9 +173,16 @@ Prerequisites:
   builds it inside a Lambda-like Linux container so the extension matches
   Lambda's actual runtime platform, regardless of what OS you're
   developing on (this was built and deployed from Windows).
+- `cedarpy` installed **locally** too (`pip install -r requirements-dev.txt`
+  from this directory) — separate from the above. `scripts/prepare_policies.py`
+  validates the schema/policies on your machine before every deploy, so it
+  needs the engine available outside the Lambda as well. Pinned to the same
+  version the Lambda bundles, so local validation can't silently diverge
+  from what's actually deployed.
 
 ```bash
 cd gateway-policy
+pip install -r requirements-dev.txt   # one-time
 bash scripts/deploy.sh
 ```
 
@@ -197,6 +209,30 @@ has something real to (attempt to) delete:
 ```bash
 python3 scripts/seed_data.py
 ```
+
+### Windows / Git Bash gotchas (hit and fixed during this build)
+
+- **Any leading-slash CLI argument (an SSM parameter name like
+  `/cellguard/gateway/mode`, a CloudWatch log group like
+  `/aws/lambda/...`, etc.) gets silently rewritten into a Windows
+  filesystem path.** This is MSYS's automatic POSIX-path translation, and
+  it corrupts the argument before the `aws` CLI ever sees it — not specific
+  to SSM, it'll bite any `aws` subcommand given a leading-slash value from
+  Git Bash. `scripts/ensure_mode_parameter.sh` and `scripts/set-mode.sh`
+  both set `MSYS_NO_PATHCONV=1` to disable it for their own calls — a no-op
+  on real Linux/macOS shells. Set it yourself (`export MSYS_NO_PATHCONV=1`)
+  before any other ad hoc `aws` command with a leading-slash argument.
+- **A pip-installed AWS CLI's `aws` script can fail to execute from Git
+  Bash** with an error like `python.exe: can't open file
+  'C:\c\Users\...\aws'` — its shebang line is a Windows absolute path
+  (`#!C:\Users\...\python.exe`), which Git Bash's shebang-exec mishandles
+  (`aws.cmd` works fine; plain `aws` doesn't, and the failure is
+  inconsistent between top-level and nested-script invocation). The
+  official [AWS CLI v2 installer](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
+  ships a real `aws.exe` and doesn't have this problem — prefer it over
+  `pip install awscli` on Windows. If you're stuck with the pip-installed
+  v1 CLI, a wrapper script named `aws` earlier in `PATH` that execs
+  `aws.cmd` works around it.
 
 ## Test without the agent
 
