@@ -8,6 +8,9 @@ venv/
 .aws-sam/
 samconfig.toml
 
+# Generated deploy state (AWS-account-specific, produced by deploy_policies.py)
+.policy-store-id
+
 # Node (agent-frontend side)
 node_modules/
 dist/

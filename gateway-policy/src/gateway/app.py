@@ -19,7 +19,7 @@ import os
 
 import boto3
 
-from common.audit import write_audit_entry
+from common.audit import write_audit_entry as _write_audit_entry
 from common.cedar import (
     build_action,
     build_context,
@@ -54,6 +54,19 @@ def _deny(reason: str, status_code: int = 200) -> dict:
     return _response(status_code, {"decision": "DENY", "reason": reason})
 
 
+def write_audit_entry(**kwargs) -> None:
+    """Best-effort wrapper: a failure here must never change what's already
+    been decided (and possibly already executed) — it only gets logged to
+    CloudWatch. Letting an audit-write blip turn an already-successful
+    ALLOW into a DENY response would tell the caller a tool call failed
+    when it actually went through, which is worse than a missing log line.
+    """
+    try:
+        _write_audit_entry(**kwargs)
+    except Exception as exc:  # noqa: BLE001 - logged, never re-raised
+        print(f"AUDIT WRITE FAILED (tool={kwargs.get('tool')!r}): {exc}")
+
+
 def _invoke_tool(tool_name: str, params: dict) -> dict:
     function_name = _TOOL_FUNCTION_NAMES[tool_name]
     invoke_response = _lambda.invoke(
@@ -68,6 +81,17 @@ def _invoke_tool(tool_name: str, params: dict) -> dict:
 
 
 def handler(event, context):
+    try:
+        return _handle(event)
+    except Exception as exc:  # noqa: BLE001 - last-resort fail-closed guard
+        # A security gateway must fail closed: if anything unexpected blew up
+        # (AVP throttled, a transient AWS error, whatever), the caller still
+        # gets a contract-shaped DENY, never a raw 500 from API Gateway that
+        # the agent/frontend wouldn't know how to parse.
+        return _response(500, {"decision": "DENY", "reason": f"Internal gateway error: {exc}"})
+
+
+def _handle(event):
     try:
         body = json.loads(event.get("body") or "{}")
     except json.JSONDecodeError:

@@ -15,13 +15,15 @@ Parameters:
     Description: >
       Amazon Verified Permissions policy store ID, produced by
       scripts/deploy_policies.py. Run that script first.
-  DefaultMode:
+  ModeParameterName:
     Type: String
-    Default: LOG_ONLY
-    AllowedValues: [LOG_ONLY, ENFORCE]
+    Default: /cellguard/gateway/mode
     Description: >
-      Initial enforcement mode. Flip it later without redeploying via
-      scripts/set-mode.sh (writes directly to the SSM parameter below).
+      Name of the SSM parameter holding LOG_ONLY/ENFORCE. Created (once,
+      outside CloudFormation) by scripts/ensure_mode_parameter.sh — this
+      template only needs its name, never its value, so that resetting the
+      value never happens on a redeploy. Single source for both the
+      GatewayFunction's env var and its IAM resource ARN below.
 
 Globals:
   Function:
@@ -66,13 +68,14 @@ Resources:
         - AttributeName: sk
           KeyType: RANGE
 
-  ModeParameter:
-    Type: AWS::SSM::Parameter
-    Properties:
-      Name: /cellguard/gateway/mode
-      Type: String
-      Value: !Ref DefaultMode
-      Description: LOG_ONLY or ENFORCE — read fresh on every gateway invocation.
+  # NOTE: the LOG_ONLY/ENFORCE mode parameter is deliberately NOT a
+  # CloudFormation resource here. If it were, every `sam deploy` would reset
+  # its Value back to whatever this template says, silently undoing a live
+  # flip made via scripts/set-mode.sh between deploys — e.g. redeploying to
+  # fix an unrelated bug right before recording the demo would quietly put
+  # you back in LOG_ONLY. Instead, scripts/ensure_mode_parameter.sh creates
+  # it once (defaulted to LOG_ONLY) and never touches it again; the stack
+  # only reads its ARN/name (see GatewayFunction below), never its Value.
 
   # ---------------------------------------------------------------------
   # Tool Lambdas — each least-privilege: only the DynamoDB verbs it uses,
@@ -139,7 +142,7 @@ Resources:
       Environment:
         Variables:
           POLICY_STORE_ID: !Ref PolicyStoreId
-          MODE_PARAMETER_NAME: !Ref ModeParameter
+          MODE_PARAMETER_NAME: !Ref ModeParameterName
           AUDIT_TABLE_NAME: !Ref AuditLogTable
           APPROVE_EXPENSE_FUNCTION_NAME: !Ref ApproveExpenseFunction
           DELETE_CUSTOMER_RECORD_FUNCTION_NAME: !Ref DeleteCustomerRecordFunction
@@ -149,7 +152,7 @@ Resources:
             - Sid: IsAuthorizedOnThisPolicyStoreOnly
               Effect: Allow
               Action: verifiedpermissions:IsAuthorized
-              Resource: !Sub "arn:aws:verifiedpermissions:${AWS::Region}:${AWS::AccountId}:policy-store/${PolicyStoreId}"
+              Resource: !Sub "arn:${AWS::Partition}:verifiedpermissions:${AWS::Region}:${AWS::AccountId}:policy-store/${PolicyStoreId}"
             - Sid: InvokeOnlyTheThreeToolFunctions
               Effect: Allow
               Action: lambda:InvokeFunction
@@ -164,7 +167,7 @@ Resources:
             - Sid: ReadModeParameterOnly
               Effect: Allow
               Action: ssm:GetParameter
-              Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ModeParameter}"
+              Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ModeParameterName}"
       Events:
         InvokeTool:
           Type: HttpApi
@@ -187,4 +190,8 @@ Outputs:
   AppDataTableName:
     Value: !Ref AppDataTable
   ModeParameterName:
-    Value: !Ref ModeParameter
+    Description: >
+      Not a stack resource — see scripts/ensure_mode_parameter.sh. Echoed
+      here only so `describe-stacks` shows the name callers need for
+      scripts/set-mode.sh.
+    Value: !Ref ModeParameterName
