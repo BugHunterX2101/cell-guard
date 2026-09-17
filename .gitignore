@@ -20,6 +20,7 @@ build/
 # Env / secrets
 .env
 .env.*
+!.env.example
 *.pem
 
 # OS
