@@ -18,28 +18,36 @@ https://uh8orn4o0d.execute-api.us-east-1.amazonaws.com/prod/invoke-tool
 
 ## Architecture
 
-```
-POST /invoke-tool  (API Gateway HTTP API)
-        |
-        v
-  gateway Lambda  (cellguard-gateway-invoke-tool)
-        |
-        |-- embedded Cedar engine (cedarpy, in-process)
-        |     schema.json + 5 policies, staged into the Lambda's own
-        |     package by scripts/prepare_policies.py, parsed once at
-        |     cold start (common/engine.py)
-        |
-        |-- reads /cellguard/gateway/mode      ---> SSM Parameter Store
-        |                                          (LOG_ONLY | ENFORCE)
-        |
-        |-- lambda:InvokeFunction (only if effective decision is ALLOW)
-        |     |-- approve_expense
-        |     |-- delete_customer_record
-        |     |-- send_wire_transfer
-        |          (each writes to cellguard-gateway-app-data)
-        |
-        `-- dynamodb:PutItem (every attempt, regardless of decision)
-              -> cellguard-gateway-audit-log
+```mermaid
+flowchart TB
+    Caller(["Agent (Person A)<br/>or curl/Postman"])
+    APIGW["API Gateway (HTTP API)<br/>POST /invoke-tool"]
+    GWFn["cellguard-gateway-invoke-tool"]
+    Cedar["Embedded Cedar engine (cedarpy)<br/>schema.json + 5 policies<br/>staged by scripts/prepare_policies.py,<br/>parsed once at cold start (common/engine.py)"]
+    Mode[("SSM Parameter<br/>/cellguard/gateway/mode<br/>LOG_ONLY | ENFORCE")]
+
+    Caller -->|the only path in| APIGW --> GWFn
+    GWFn <-->|"in-process, no network hop"| Cedar
+    GWFn -.->|reads fresh every request| Mode
+
+    subgraph Tools["invoked only if effective decision is ALLOW"]
+        T1["approve_expense"]
+        T2["delete_customer_record"]
+        T3["send_wire_transfer"]
+    end
+    GWFn -.->|lambda:InvokeFunction| T1
+    GWFn -.->|lambda:InvokeFunction| T2
+    GWFn -.->|lambda:InvokeFunction| T3
+
+    AppData[("DynamoDB<br/>cellguard-gateway-app-data")]
+    Audit[("DynamoDB<br/>cellguard-gateway-audit-log")]
+    T1 --> AppData
+    T2 --> AppData
+    T3 --> AppData
+    GWFn -->|"dynamodb:PutItem — every attempt,<br/>ALLOW or DENY alike"| Audit
+
+    style Cedar fill:#fff3cd,stroke:#c9a227
+    style Audit fill:#e8eaf6,stroke:#5c6bc0
 ```
 
 No Lambda in this slice calls another tool Lambda directly, and no Lambda
@@ -47,6 +55,37 @@ holds IAM permission it doesn't use — see the `Policies:` block for each
 function in `template.yaml`. The gateway Lambda's own AWS permissions do not
 grant the risky actions; the embedded Cedar engine's decision is the gate,
 evaluated in-process with no network call involved at all.
+
+### Request lifecycle — the LOG_ONLY vs. ENFORCE branch
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant GW as Gateway Lambda
+    participant Cedar as Cedar Engine
+    participant SSM as SSM Parameter
+    participant Tool as Tool Lambda
+    participant Audit as Audit Log (DynamoDB)
+
+    Caller->>GW: POST /invoke-tool<br/>{ tool, params, principal, context }
+    GW->>GW: validate contract, build Cedar request
+    GW->>Cedar: authorize(principal, action, resource, context)
+    Cedar-->>GW: cedar_decision = ALLOW | DENY
+    GW->>SSM: get_parameter(mode)
+    SSM-->>GW: LOG_ONLY | ENFORCE
+
+    Note over GW: effective_decision =<br/>ENFORCE → cedar_decision<br/>LOG_ONLY → always ALLOW
+
+    alt effective_decision == ALLOW
+        GW->>Tool: lambda:InvokeFunction
+        Tool-->>GW: result
+    else effective_decision == DENY
+        Note over GW,Tool: tool never invoked
+    end
+
+    GW->>Audit: put_item(cedar_decision, effective_decision,<br/>mode, reason, tool_executed) — best effort,<br/>never overrides an already-decided outcome
+    GW-->>Caller: { decision, reason, result?, mode, policyDecision }
+```
 
 ## Why embedded Cedar, not Amazon Verified Permissions
 
@@ -134,6 +173,24 @@ crafted request that happens to also match a permit. The permits require a
 strictly positive amount (not just "at or below the threshold") so a
 negative amount doesn't slip through by accident — with no permit
 matching, Cedar's default of implicit deny takes over.
+
+```mermaid
+flowchart LR
+    Req["Request: action + amount"] --> Forbid{"Does any\nforbid match?"}
+    Forbid -->|yes| Deny["DENY\n(forbid always wins)"]
+    Forbid -->|no| Permit{"Does any\npermit match?"}
+    Permit -->|yes| Allow["ALLOW"]
+    Permit -->|no| ImplicitDeny["DENY\n(Cedar's default —\nno rule matched)"]
+
+    style Deny fill:#ffebee,stroke:#c62828
+    style ImplicitDeny fill:#ffebee,stroke:#c62828
+    style Allow fill:#e8f5e9,stroke:#2e7d32
+```
+
+This is why negative/zero amounts, `delete_customer_record` (no permit
+exists for it at all), and anything above a threshold all land on DENY
+through two different paths — an explicit `forbid`, or simply no `permit`
+ever matching — and why the outcome can't depend on evaluation order.
 
 `policies/schema.json` and `policies/policies/*.cedar` are the single
 edited-by-humans source of truth. `scripts/prepare_policies.py` copies them

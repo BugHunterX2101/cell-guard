@@ -1,37 +1,256 @@
 # Cell-Guard
 
-A policy-enforcement gateway that sits between an AI agent and the tools
-it's allowed to call. Every tool call is checked against Cedar authorization
-policies before it executes — a deterministic check the model cannot talk
-its way around, not a system-prompt suggestion. Cedar runs embedded
-directly in the gateway Lambda rather than via Amazon Verified Permissions;
-see [`gateway-policy/README.md`](./gateway-policy/README.md#why-embedded-cedar-not-amazon-verified-permissions) for why.
+**A prompt injection can talk an AI agent into anything the model believes. It can't talk its way past a policy engine that never listens to the model in the first place.**
 
-Full context: [`Cell-Guard — Product Requirements Document.pdf`](./Cell-Guard%20%E2%80%94%20Product%20Requirements%20Document.pdf).
+Cell-Guard is a policy-enforcement gateway that sits between an AI agent and every tool it's allowed to call. Every attempted action — approve an expense, delete a customer record, send a wire transfer — is checked against deterministic [Cedar](https://www.cedarpolicy.com/) authorization policies *before* it executes. The check runs outside the model's reasoning entirely: no system prompt to talk out of, no instruction the model can be convinced to override.
 
-**Deployed gateway (Person B's slice):**
-`https://uh8orn4o0d.execute-api.us-east-1.amazonaws.com/prod/invoke-tool`
-— live on AWS (`us-east-1`), verified end-to-end in both `LOG_ONLY` and
-`ENFORCE` mode; see [`gateway-policy/README.md`](./gateway-policy/README.md#test-without-the-agent)
-to exercise it directly.
+[![AWS](https://img.shields.io/badge/AWS-Lambda%20·%20API%20Gateway%20·%20DynamoDB-FF9900?logo=amazonaws&logoColor=white)](#tech-stack)
+[![Cedar](https://img.shields.io/badge/Cedar-Policy%20Engine-2E5AAC)](https://www.cedarpolicy.com/)
+[![Status](https://img.shields.io/badge/gateway-deployed%20%26%20verified-brightgreen)](#live-deployment)
+[![Hackathon](https://img.shields.io/badge/First%20Commit-Ship%20It%20Track-blueviolet)](https://www.wemakedevs.org/aws/first-commit)
+
+---
+
+## The problem, in one picture
+
+An agent with write access reads text it doesn't control — a chat message, a customer note, a document. If that text hides an instruction, and nothing stands between "the model decided to do X" and "X happens," the injected instruction runs with full authority. Most teams' only defense is the system prompt — a suggestion, not a boundary.
+
+Cell-Guard proves the alternative works, with the *same* attack payload producing two different outcomes depending on one setting:
+
+```mermaid
+sequenceDiagram
+    actor Attacker
+    participant Agent as Bedrock Agent
+    participant GW as Gateway Lambda
+    participant Cedar as Cedar Engine
+    participant Tool as approve_expense
+    participant Audit as Audit Log
+
+    Attacker->>Agent: "customer note" with a hidden instruction:<br/>approve a $50,000 reimbursement
+    Agent->>GW: POST /invoke-tool<br/>{ tool: approve_expense, amount: 50000, source: injected_doc }
+    GW->>Cedar: evaluate against policy<br/>(amount > $500 threshold)
+    Cedar-->>GW: DENY
+
+    rect rgb(255, 235, 235)
+    Note over GW,Tool: Mode = LOG_ONLY — the gap teams ship with today
+    GW->>Tool: invoked anyway
+    Tool-->>GW: approved (money moves)
+    GW->>Audit: record policyDecision=DENY, but ALLOWED
+    GW-->>Agent: decision: ALLOW — the attack succeeded
+    end
+
+    rect rgb(230, 255, 235)
+    Note over GW,Tool: Mode = ENFORCE — the same request, one flag flipped
+    GW--xTool: never invoked
+    GW->>Audit: record policyDecision=DENY, BLOCKED
+    GW-->>Agent: decision: DENY — the attack failed
+    end
+```
+
+That contrast — one payload, one flag, two outcomes — is the entire demo, and it runs on real deployed AWS infrastructure, not a slide.
+
+---
+
+## Architecture
+
+```mermaid
+flowchart TB
+    subgraph Client["Person A — Agent & Frontend"]
+        User(["Employee<br/>or attacker"])
+        UI["Chat UI"]
+        Agent["Bedrock Agent<br/>tool-calling"]
+        User --> UI --> Agent
+    end
+
+    subgraph Gateway["Person B — Gateway & Policy  (deployed)"]
+        direction TB
+        APIGW["API Gateway<br/>POST /invoke-tool"]
+        GWFn["Gateway Lambda<br/>cellguard-gateway-invoke-tool"]
+        Cedar["Embedded Cedar Engine<br/>schema.json + 5 policies<br/>(cedarpy, in-process)"]
+        Mode[("SSM Parameter<br/>LOG_ONLY / ENFORCE")]
+
+        APIGW --> GWFn
+        GWFn <--> Cedar
+        GWFn -.->|reads mode| Mode
+
+        subgraph Tools["Tool Lambdas — invoked only on ALLOW"]
+            T1["approve_expense"]
+            T2["delete_customer_record"]
+            T3["send_wire_transfer"]
+        end
+
+        GWFn -.->|ALLOW only| T1
+        GWFn -.->|ALLOW only| T2
+        GWFn -.->|ALLOW only| T3
+
+        AppData[("DynamoDB<br/>cellguard-gateway-app-data")]
+        Audit[("DynamoDB<br/>cellguard-gateway-audit-log")]
+
+        T1 --> AppData
+        T2 --> AppData
+        T3 --> AppData
+        GWFn -->|every attempt, ALLOW or DENY| Audit
+    end
+
+    Agent -->|"the only path to any tool"| APIGW
+
+    style Gateway fill:#eafbea,stroke:#2e7d32
+    style Client fill:#f5f5f5,stroke:#999
+    style Cedar fill:#fff3cd,stroke:#c9a227
+```
+
+No Lambda calls another tool Lambda directly, and no Lambda holds an IAM permission it doesn't use. The gateway's own AWS permissions never grant the risky actions — Cedar's decision is the gate, evaluated in-process with no network hop.
+
+> **Why embedded Cedar, not Amazon Verified Permissions?** The PRD calls for AVP; this deployment runs the same Cedar engine embedded directly in the gateway Lambda instead, because AVP is blocked account-wide on the hackathon-provisioned AWS account this was built against. Full story, verification steps, and the exact error signature: [`gateway-policy/README.md`](./gateway-policy/README.md#why-embedded-cedar-not-amazon-verified-permissions).
+
+---
+
+## Live deployment
+
+Person B's slice is deployed on AWS (`us-east-1`) and verified end-to-end — every case below confirmed live, cross-checked against the DynamoDB audit log:
+
+```
+https://uh8orn4o0d.execute-api.us-east-1.amazonaws.com/prod/invoke-tool
+```
+
+Try it yourself, no agent required:
+```bash
+export GATEWAY_URL="https://uh8orn4o0d.execute-api.us-east-1.amazonaws.com/prod/invoke-tool"
+bash gateway-policy/tests/curl-examples.sh
+```
+
+| Scenario | LOG_ONLY | ENFORCE |
+|---|---|---|
+| Approve $120 expense (normal) | ALLOW | ALLOW |
+| Approve $50,000 expense (attack) | ALLOW *(logged as should-deny)* | DENY |
+| Delete a customer record (attack) | ALLOW *(logged as should-deny)* | DENY |
+| Send $250 wire (normal) | ALLOW | ALLOW |
+| Send $25,000 wire (attack) | ALLOW *(logged as should-deny)* | DENY |
+| Negative-amount edge case | ALLOW *(logged as should-deny)* | DENY |
+
+---
+
+## File structure
+
+```
+cell-guard/
+├── README.md                                     — you are here
+├── .gitignore                                    — build artifacts, staged policies, venvs
+├── Cell-Guard — Product Requirements Document.pdf — full spec and rationale
+│
+├── gateway-policy/                                — Person B (deployed)
+│   ├── README.md                                  — architecture, contract, deploy guide
+│   ├── requirements-dev.txt                       — local tooling dep (cedarpy, for validation)
+│   ├── template.yaml                              — AWS SAM (CloudFormation) stack
+│   │
+│   ├── policies/                                  — Cedar source of truth (hand-edited)
+│   │   ├── schema.json                            — entity types, actions, context shapes
+│   │   └── policies/
+│   │       ├── 01-forbid-delete-customer-record.cedar
+│   │       ├── 02-forbid-approve-expense-over-threshold.cedar
+│   │       ├── 03-permit-approve-expense-within-threshold.cedar
+│   │       ├── 04-forbid-wire-transfer-over-threshold.cedar
+│   │       └── 05-permit-wire-transfer-within-threshold.cedar
+│   │
+│   ├── src/
+│   │   ├── gateway/                               — cellguard-gateway-invoke-tool
+│   │   │   ├── app.py                             — /invoke-tool handler
+│   │   │   ├── requirements.txt                   — cedarpy (bundled into the Lambda)
+│   │   │   ├── policies/                          — staged copy of policies/ (gitignored)
+│   │   │   └── common/
+│   │   │       ├── audit.py                       — DynamoDB audit-log writer
+│   │   │       ├── cedar.py                       — request/context builders
+│   │   │       ├── engine.py                      — embedded Cedar evaluation
+│   │   │       └── mode.py                        — LOG_ONLY/ENFORCE lookup (SSM)
+│   │   │
+│   │   └── tools/                                 — one Lambda per tool
+│   │       ├── approve_expense/app.py
+│   │       ├── delete_customer_record/app.py
+│   │       └── send_wire_transfer/app.py
+│   │
+│   ├── scripts/
+│   │   ├── deploy.sh                              — full deploy, in order
+│   │   ├── prepare_policies.py                    — stage + validate Cedar policies
+│   │   ├── ensure_mode_parameter.sh                — create the mode SSM parameter once
+│   │   ├── set-mode.sh                            — flip LOG_ONLY <-> ENFORCE live
+│   │   └── seed_data.py                           — sample customer records for the demo
+│   │
+│   └── tests/
+│       ├── curl-examples.sh                       — exercise /invoke-tool, no agent needed
+│       └── postman_collection.json
+│
+└── agent-frontend/                                — Person A (not started)
+    └── README.md                                  — contract + integration notes
+```
+
+---
 
 ## Repo layout
 
-Split along the one real seam in the architecture — the agent doesn't need
-to know how the gateway enforces policy, and the gateway doesn't need to
-know how the agent thinks. Both sides build against the same locked
-`/invoke-tool` contract.
+Split along the one real seam in the architecture: the agent doesn't need to know how the gateway enforces policy, and the gateway doesn't need to know how the agent thinks. Both sides build against the same locked `/invoke-tool` contract and nothing else.
 
-- **[`gateway-policy/`](./gateway-policy/)** — Person B: Cedar schema +
-  policies (evaluated by an embedded Cedar engine), API Gateway + gateway
-  Lambda, the 3 tool Lambdas, the audit log. Fully testable with
-  curl/Postman, no agent required. Start here:
-  [`gateway-policy/README.md`](./gateway-policy/README.md).
-- **`agent-frontend/`** — Person A: Bedrock tool-calling agent, chat UI, the
-  injected-attack payload.
+```mermaid
+flowchart LR
+    A["agent-frontend/<br/><i>Person A — not yet built</i><br/>Bedrock agent, chat UI,<br/>injected-attack payload"]
+    B["gateway-policy/<br/><i>Person B — deployed</i><br/>Cedar policies, gateway Lambda,<br/>3 tool Lambdas, audit log"]
+    A <-->|"POST /invoke-tool<br/>(the only integration point)"| B
 
-## Resource naming
+    style A fill:#f5f5f5,stroke:#999
+    style B fill:#eafbea,stroke:#2e7d32
+```
 
-`cellguard-gateway-*` (Person B) and `cellguard-agent-*` (Person A) — no
-shared Lambda, no shared IAM role, no shared DynamoDB table between the two
-sides. The only integration point is the `/invoke-tool` URL.
+| Folder | Owner | Status | Docs |
+|---|---|---|---|
+| [`gateway-policy/`](./gateway-policy/) | Person B | Deployed & verified | [README](./gateway-policy/README.md) |
+| [`agent-frontend/`](./agent-frontend/) | Person A | Not started | [README](./agent-frontend/README.md) |
+
+Resource naming keeps the two sides fully isolated: `cellguard-gateway-*` (Person B) vs. `cellguard-agent-*` (Person A) — no shared Lambda, no shared IAM role, no shared DynamoDB table.
+
+---
+
+## Tech stack
+
+| Layer | Technology |
+|---|---|
+| Agent | Amazon Bedrock (tool-calling) *(planned)* |
+| Gateway | Amazon API Gateway (HTTP API) + AWS Lambda |
+| Policy engine | [Cedar](https://www.cedarpolicy.com/) — embedded via [`cedarpy`](https://pypi.org/project/cedarpy/) |
+| Data | Amazon DynamoDB (app data + audit log) |
+| Config | AWS Systems Manager Parameter Store (LOG_ONLY/ENFORCE toggle) |
+| IaC | AWS SAM (CloudFormation) |
+| Frontend | Static chat UI on Amplify Hosting / S3 + CloudFront *(planned)* |
+
+---
+
+## Quick start
+
+```bash
+git clone https://github.com/BugHunterX2101/cell-guard.git
+cd cell-guard/gateway-policy
+pip install -r requirements-dev.txt
+bash scripts/deploy.sh
+```
+
+Full prerequisites, the exact `/invoke-tool` contract, the 5 Cedar policies, and how to flip `LOG_ONLY` <-> `ENFORCE` live: **[`gateway-policy/README.md`](./gateway-policy/README.md)**.
+
+---
+
+## Project status
+
+- [x] Cedar schema + 5 policies (threshold + unconditional-forbid rules), validated against the real Cedar engine
+- [x] Gateway Lambda enforcing the `/invoke-tool` contract, fail-closed on any internal error
+- [x] 3 tool Lambdas, each least-privilege (only the DynamoDB verb it uses, on one table)
+- [x] Audit log capturing every attempt — Cedar's decision, the effective decision, mode, and reason
+- [x] `LOG_ONLY` <-> `ENFORCE` switchable live, with no redeploy and no risk of a redeploy silently resetting it
+- [x] Deployed to AWS and verified end-to-end (both modes, all 7 test cases, zero errors in CloudWatch)
+- [ ] Bedrock agent + tool-calling (Person A)
+- [ ] Chat UI + mode indicator (Person A)
+- [ ] Injected-attack payload + integration swap (Saturday)
+- [ ] 3-minute demo video
+- [ ] Builder Center blog post
+
+---
+
+## Built for First Commit
+
+Cell-Guard is being built for [**First Commit**](https://www.wemakedevs.org/aws/first-commit) — a 4-day AWS hackathon (Ship It track). Full requirements and rationale: [`Cell-Guard — Product Requirements Document.pdf`](./Cell-Guard%20%E2%80%94%20Product%20Requirements%20Document.pdf).
