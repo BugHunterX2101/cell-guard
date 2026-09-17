@@ -1,0 +1,190 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Cell-Guard — Gateway & Policy (Person B's slice).
+  API Gateway (/invoke-tool) -> gateway Lambda -> Amazon Verified Permissions
+  IsAuthorized -> tool Lambdas, with every decision written to an audit log.
+  The Cedar schema/policies themselves are managed out-of-band by
+  scripts/deploy_policies.py (see README) — this template consumes the
+  resulting PolicyStoreId as a parameter rather than owning it, so policy
+  iteration never requires a stack update.
+
+Parameters:
+  PolicyStoreId:
+    Type: String
+    Description: >
+      Amazon Verified Permissions policy store ID, produced by
+      scripts/deploy_policies.py. Run that script first.
+  DefaultMode:
+    Type: String
+    Default: LOG_ONLY
+    AllowedValues: [LOG_ONLY, ENFORCE]
+    Description: >
+      Initial enforcement mode. Flip it later without redeploying via
+      scripts/set-mode.sh (writes directly to the SSM parameter below).
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 10
+    MemorySize: 256
+    Tracing: Active
+
+Resources:
+  # ---------------------------------------------------------------------
+  # Data
+  # ---------------------------------------------------------------------
+  AppDataTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: cellguard-gateway-app-data
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+
+  AuditLogTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: cellguard-gateway-audit-log
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+
+  ModeParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /cellguard/gateway/mode
+      Type: String
+      Value: !Ref DefaultMode
+      Description: LOG_ONLY or ENFORCE — read fresh on every gateway invocation.
+
+  # ---------------------------------------------------------------------
+  # Tool Lambdas — each least-privilege: only the DynamoDB verbs it uses,
+  # only on the one table, and only invokable by the gateway function below.
+  # ---------------------------------------------------------------------
+  ApproveExpenseFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: cellguard-gateway-approve-expense
+      CodeUri: src/tools/approve_expense/
+      Handler: app.handler
+      Environment:
+        Variables:
+          APP_TABLE_NAME: !Ref AppDataTable
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: dynamodb:PutItem
+              Resource: !GetAtt AppDataTable.Arn
+
+  DeleteCustomerRecordFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: cellguard-gateway-delete-customer-record
+      CodeUri: src/tools/delete_customer_record/
+      Handler: app.handler
+      Environment:
+        Variables:
+          APP_TABLE_NAME: !Ref AppDataTable
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:DeleteItem
+                - dynamodb:PutItem
+              Resource: !GetAtt AppDataTable.Arn
+
+  SendWireTransferFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: cellguard-gateway-send-wire-transfer
+      CodeUri: src/tools/send_wire_transfer/
+      Handler: app.handler
+      Environment:
+        Variables:
+          APP_TABLE_NAME: !Ref AppDataTable
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: dynamodb:PutItem
+              Resource: !GetAtt AppDataTable.Arn
+
+  # ---------------------------------------------------------------------
+  # Gateway Lambda — the only thing allowed to call IsAuthorized, invoke the
+  # tool Lambdas, or write to the audit log. IAM here does not grant the
+  # risky actions themselves; Cedar's decision is what gates them.
+  # ---------------------------------------------------------------------
+  GatewayFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: cellguard-gateway-invoke-tool
+      CodeUri: src/gateway/
+      Handler: app.handler
+      Environment:
+        Variables:
+          POLICY_STORE_ID: !Ref PolicyStoreId
+          MODE_PARAMETER_NAME: !Ref ModeParameter
+          AUDIT_TABLE_NAME: !Ref AuditLogTable
+          APPROVE_EXPENSE_FUNCTION_NAME: !Ref ApproveExpenseFunction
+          DELETE_CUSTOMER_RECORD_FUNCTION_NAME: !Ref DeleteCustomerRecordFunction
+          SEND_WIRE_TRANSFER_FUNCTION_NAME: !Ref SendWireTransferFunction
+      Policies:
+        - Statement:
+            - Sid: IsAuthorizedOnThisPolicyStoreOnly
+              Effect: Allow
+              Action: verifiedpermissions:IsAuthorized
+              Resource: !Sub "arn:aws:verifiedpermissions:${AWS::Region}:${AWS::AccountId}:policy-store/${PolicyStoreId}"
+            - Sid: InvokeOnlyTheThreeToolFunctions
+              Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource:
+                - !GetAtt ApproveExpenseFunction.Arn
+                - !GetAtt DeleteCustomerRecordFunction.Arn
+                - !GetAtt SendWireTransferFunction.Arn
+            - Sid: WriteAuditLogOnly
+              Effect: Allow
+              Action: dynamodb:PutItem
+              Resource: !GetAtt AuditLogTable.Arn
+            - Sid: ReadModeParameterOnly
+              Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ModeParameter}"
+      Events:
+        InvokeTool:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /invoke-tool
+            Method: POST
+
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: prod
+
+Outputs:
+  InvokeToolUrl:
+    Description: The contract endpoint — POST requests here per the agent/gateway contract.
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/prod/invoke-tool"
+  AuditLogTableName:
+    Value: !Ref AuditLogTable
+  AppDataTableName:
+    Value: !Ref AppDataTable
+  ModeParameterName:
+    Value: !Ref ModeParameter
