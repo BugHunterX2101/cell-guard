@@ -6,7 +6,9 @@ development gateway so the whole demo runs with no AWS account attached.
 
 ## Contract and security boundary
 
-The agent Lambda holds `bedrock:Converse` and nothing else. It has no permission
+The agent Lambda holds `bedrock:InvokeModel`/`bedrock:InvokeModelWithResponseStream`
+(scoped to `BedrockModelId`) and nothing else — see the note below on why it's
+`InvokeModel` rather than a same-named `Converse` action. It has no permission
 to invoke any tool Lambda. Every tool use is POSTed to the locked
 `POST /invoke-tool` contract documented in `../gateway-policy/README.md`, and
 `GatewayUrl` is the only value that changes at integration: start on the mock,
@@ -88,8 +90,18 @@ bash scripts/deploy.sh
 ```
 
 The default model is `amazon.nova-lite-v1:0`; change `BedrockModelId` only if
-that model is unavailable in the chosen region. Host the `npm run build` output
-(`dist/`) on Amplify Hosting or S3 + CloudFront.
+that model is unavailable in the chosen region.
+
+To host the static UI itself (Amplify Hosting or S3 + CloudFront), build it
+with the deployed `AgentApiUrl` baked in — Vite inlines `VITE_*` variables
+into the bundle at build time, not read at runtime, so setting the env var
+after the build (or only in `.env.local` for `npm run dev`) has no effect on
+what ships:
+
+```bash
+VITE_AGENT_API_URL="https://hji9tqdwa3.execute-api.us-east-1.amazonaws.com/chat" npm run build
+# then upload dist/ to Amplify Hosting or S3 + CloudFront
+```
 
 **IAM gotcha found during deployment:** the Bedrock `Converse` API is
 authorized by the `bedrock:InvokeModel` action, not a same-named `Converse`

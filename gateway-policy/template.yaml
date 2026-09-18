@@ -177,7 +177,7 @@ Resources:
 Outputs:
   InvokeToolUrl:
     Description: The contract endpoint — POST requests here per the agent/gateway contract.
-    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/prod/invoke-tool"
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/prod/invoke-tool"
   AuditLogTableName:
     Value: !Ref AuditLogTable
   AppDataTableName:
