@@ -1,0 +1,86 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Cell-Guard Person A - Bedrock agent and chat API
+
+Parameters:
+  UseMockGateway:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Keep true for independent Person A development; set false only for Person B integration.
+  GatewayUrl:
+    Type: String
+    Default: https://replace-with-gateway-url.invalid/invoke-tool
+    Description: The only integration seam. Start with MockGatewayUrl, then replace with Person B's InvokeToolUrl.
+  BedrockModelId:
+    Type: String
+    Default: amazon.nova-lite-v1:0
+  MockMode:
+    Type: String
+    Default: LOG_ONLY
+    AllowedValues: [LOG_ONLY, ENFORCE]
+    Description: Mode reported by the development mock only. Person B's SSM parameter governs the real gateway.
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 30
+    MemorySize: 512
+    Environment:
+      Variables:
+        GATEWAY_URL: !Ref GatewayUrl
+        BEDROCK_MODEL_ID: !Ref BedrockModelId
+
+Resources:
+  AgentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: cellguard-agent-chat
+      CodeUri: src/agent/
+      Handler: app.handler
+      Environment:
+        Variables:
+          GATEWAY_URL: !If [UseMock, !GetAtt MockGatewayFunctionUrl.FunctionUrl, !Ref GatewayUrl]
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: bedrock:Converse
+              Resource: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${BedrockModelId}
+      Events:
+        Chat:
+          Type: HttpApi
+          Properties:
+            Path: /chat
+            Method: POST
+            ApiId: !Ref AgentApi
+
+  AgentApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins: ['*']
+        AllowHeaders: ['content-type']
+        AllowMethods: ['POST', 'OPTIONS']
+
+  MockGatewayFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: cellguard-agent-mock-gateway
+      CodeUri: src/mock_gateway/
+      Handler: app.handler
+      Environment:
+        Variables:
+          MOCK_MODE: !Ref MockMode
+      FunctionUrlConfig:
+        AuthType: NONE
+
+Outputs:
+  AgentApiUrl:
+    Description: Set this as VITE_AGENT_API_URL before building the static frontend.
+    Value: !Sub https://${AgentApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/chat
+  MockGatewayUrl:
+    Description: Use as GatewayUrl during the independent Person A demo.
+    Value: !GetAtt MockGatewayFunctionUrl.FunctionUrl
+
+Conditions:
+  UseMock: !Equals [!Ref UseMockGateway, 'true']

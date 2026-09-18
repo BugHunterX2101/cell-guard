@@ -55,10 +55,10 @@ That contrast — one payload, one flag, two outcomes — is the entire demo, an
 
 ```mermaid
 flowchart TB
-    subgraph Client["Person A — Agent & Frontend"]
+    subgraph Client["Person A — Agent & Frontend  (deployed)"]
         User(["Employee<br/>or attacker"])
-        UI["Chat UI"]
-        Agent["Bedrock Agent<br/>tool-calling"]
+        UI["React Chat UI"]
+        Agent["Bedrock Agent<br/>cellguard-agent-chat"]
         User --> UI --> Agent
     end
 
@@ -179,8 +179,34 @@ cell-guard/
 │       ├── curl-examples.sh                       — exercise /invoke-tool, no agent needed
 │       └── postman_collection.json
 │
-└── agent-frontend/                                — Person A (not started)
-    └── README.md                                  — contract + integration notes
+└── agent-frontend/                                — Person A (built, integrated with the deployed gateway)
+    ├── README.md                                  — design notes, deploy guide, demo script
+    ├── .env.example                                — VITE_AGENT_API_URL
+    ├── index.html
+    ├── package.json / package-lock.json
+    ├── tsconfig.json / tsconfig.app.json / tsconfig.node.json
+    ├── vite.config.ts                             — dev-only mock agent at POST /chat
+    ├── template.yaml                              — AWS SAM stack: agent Lambda + mock gateway
+    │
+    ├── scripts/
+    │   └── deploy.sh                               — build + deploy, mock or real gateway
+    │
+    └── src/
+        ├── main.tsx                               — React entry point
+        ├── App.tsx                                 — chat console, scenario picker, audit trail
+        ├── api.ts                                  — /chat client, verdict + label types
+        ├── scenarios.ts                            — the 4 demo scenarios (3 hostile, 1 routine)
+        ├── styles.css
+        ├── vite-env.d.ts
+        │
+        ├── agent/app.py                            — cellguard-agent-chat (Bedrock Converse loop)
+        ├── mock_gateway/app.py                      — cellguard-agent-mock-gateway (dev-only stand-in)
+        │
+        └── components/
+            ├── GatewayPipeline.tsx                  — animated Agent→Gateway→Tool diagram
+            ├── VerdictCard.tsx                       — per-attempt permitted/blocked/unenforced card
+            ├── ModeBadge.tsx                         — live LOG_ONLY/ENFORCE readout
+            └── AuditTrail.tsx                        — session-scoped attempt history
 ```
 
 ---
@@ -191,18 +217,18 @@ Split along the one real seam in the architecture: the agent doesn't need to kno
 
 ```mermaid
 flowchart LR
-    A["agent-frontend/<br/><i>Person A — not yet built</i><br/>Bedrock agent, chat UI,<br/>injected-attack payload"]
+    A["agent-frontend/<br/><i>Person A — built</i><br/>Bedrock agent, chat UI,<br/>injected-attack payload"]
     B["gateway-policy/<br/><i>Person B — deployed</i><br/>Cedar policies, gateway Lambda,<br/>3 tool Lambdas, audit log"]
     A <-->|"POST /invoke-tool<br/>(the only integration point)"| B
 
-    style A fill:#f5f5f5,stroke:#999
+    style A fill:#eafbea,stroke:#2e7d32
     style B fill:#eafbea,stroke:#2e7d32
 ```
 
 | Folder | Owner | Status | Docs |
 |---|---|---|---|
 | [`gateway-policy/`](./gateway-policy/) | Person B | Deployed & verified | [README](./gateway-policy/README.md) |
-| [`agent-frontend/`](./agent-frontend/) | Person A | Not started | [README](./agent-frontend/README.md) |
+| [`agent-frontend/`](./agent-frontend/) | Person A | Built, wired to the real gateway | [README](./agent-frontend/README.md) |
 
 Resource naming keeps the two sides fully isolated: `cellguard-gateway-*` (Person B) vs. `cellguard-agent-*` (Person A) — no shared Lambda, no shared IAM role, no shared DynamoDB table.
 
@@ -212,18 +238,19 @@ Resource naming keeps the two sides fully isolated: `cellguard-gateway-*` (Perso
 
 | Layer | Technology |
 |---|---|
-| Agent | Amazon Bedrock (tool-calling) *(planned)* |
+| Agent | Amazon Bedrock Converse (tool-calling), `amazon.nova-lite-v1:0` |
 | Gateway | Amazon API Gateway (HTTP API) + AWS Lambda |
 | Policy engine | [Cedar](https://www.cedarpolicy.com/) — embedded via [`cedarpy`](https://pypi.org/project/cedarpy/) |
 | Data | Amazon DynamoDB (app data + audit log) |
 | Config | AWS Systems Manager Parameter Store (LOG_ONLY/ENFORCE toggle) |
 | IaC | AWS SAM (CloudFormation) |
-| Frontend | Static chat UI on Amplify Hosting / S3 + CloudFront *(planned)* |
+| Frontend | React 19 + Vite, self-hosted Archivo/JetBrains Mono, anime.js for the gateway diagram |
 
 ---
 
 ## Quick start
 
+Gateway (deploy first — the frontend needs its `InvokeToolUrl`):
 ```bash
 git clone https://github.com/BugHunterX2101/cell-guard.git
 cd cell-guard/gateway-policy
@@ -231,7 +258,14 @@ pip install -r requirements-dev.txt
 bash scripts/deploy.sh
 ```
 
-Full prerequisites, the exact `/invoke-tool` contract, the 5 Cedar policies, and how to flip `LOG_ONLY` <-> `ENFORCE` live: **[`gateway-policy/README.md`](./gateway-policy/README.md)**.
+Agent + chat UI, wired to that gateway:
+```bash
+cd ../agent-frontend
+npm install && npm run dev            # try it locally first, mock gateway, no AWS needed
+USE_MOCK_GATEWAY=false GATEWAY_URL="<InvokeToolUrl from above>" bash scripts/deploy.sh
+```
+
+Full prerequisites, the exact `/invoke-tool` contract, the 5 Cedar policies, and how to flip `LOG_ONLY` <-> `ENFORCE` live: **[`gateway-policy/README.md`](./gateway-policy/README.md)**. Agent design, demo script, and injected-attack scenarios: **[`agent-frontend/README.md`](./agent-frontend/README.md)**.
 
 ---
 
@@ -243,9 +277,9 @@ Full prerequisites, the exact `/invoke-tool` contract, the 5 Cedar policies, and
 - [x] Audit log capturing every attempt — Cedar's decision, the effective decision, mode, and reason
 - [x] `LOG_ONLY` <-> `ENFORCE` switchable live, with no redeploy and no risk of a redeploy silently resetting it
 - [x] Deployed to AWS and verified end-to-end (both modes, all 7 test cases, zero errors in CloudWatch)
-- [ ] Bedrock agent + tool-calling (Person A)
-- [ ] Chat UI + mode indicator (Person A)
-- [ ] Injected-attack payload + integration swap (Saturday)
+- [x] Bedrock Converse agent + tool-calling, wired to the real gateway contract (Person A)
+- [x] Chat UI + live mode indicator + audit trail (Person A)
+- [x] Injected-attack payload (4 scenarios) + integration swap onto the real gateway
 - [ ] 3-minute demo video
 - [ ] Builder Center blog post
 

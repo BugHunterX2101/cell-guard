@@ -1,0 +1,630 @@
+@import '@fontsource-variable/archivo/index.css';
+@import '@fontsource-variable/jetbrains-mono/index.css';
+
+/* ---------------------------------------------------------------------------
+   Cell-Guard agent console — an Operate surface.
+
+   The working controls and the data sit in the first viewport. Type runs on a
+   fixed rem scale (no fluid display sizes), the smallest text in the interface
+   is 13px, and one enforcement red is reserved entirely for policy signal.
+--------------------------------------------------------------------------- */
+
+:root {
+  --paper: #ffffff;
+  --panel: #fafaf9;
+  --panel-2: #f1f1ef;
+  --ink: #111111;
+  --ink-2: #565654;
+  --rule: #111111;
+  --rule-soft: #dcdcd9;
+  --red: #d4002a;
+  --red-deep: #a8001f;
+  --focus: #0033cc;
+
+  --sans: 'Archivo Variable', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --mono: 'JetBrains Mono Variable', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* Fixed role scale, ~1.15 ratio. Nothing in the UI goes below --text-xs. */
+  --text-xs: 0.8125rem;   /* 13px — metadata, captions, labels */
+  --text-sm: 0.875rem;    /* 14px — data cells, parameters */
+  --text-md: 0.9375rem;   /* 15px — controls, secondary body */
+  --text-base: 1rem;      /* 16px — messages, prose */
+  --text-lg: 1.0625rem;   /* 17px — the claim line */
+  --text-xl: 1.25rem;     /* 20px — verdict word */
+
+  --pad: 0.875rem;
+  --pad-lg: 1.125rem;
+
+  color-scheme: light;
+  font-family: var(--sans);
+  font-size: 100%;
+  font-synthesis: none;
+  color: var(--ink);
+  background: var(--paper);
+  -webkit-font-smoothing: antialiased;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-width: 320px;
+  font-size: var(--text-md);
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: rgb(212 0 42 / 0.16);
+}
+
+h1, h2, h3, p, dl, dd, figure { margin: 0; }
+ul { margin: 0; padding: 0; list-style: none; }
+button, textarea, input, table { font: inherit; color: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.skip-link {
+  position: fixed;
+  z-index: 20;
+  top: 0;
+  left: 1rem;
+  transform: translateY(-110%);
+  background: var(--focus);
+  color: #fff;
+  padding: 0.6rem 1rem;
+  font-size: var(--text-md);
+  font-weight: 600;
+  text-decoration: none;
+  transition: transform 160ms ease-out;
+}
+.skip-link:focus-visible { transform: translateY(0); }
+
+/* A single label role, used for every field name and column header. 13px at
+   moderate tracking stays readable; the previous 11px / 0.1em did not. */
+.panel-bar h2,
+.panel-bar label,
+.bubble-who,
+.audit-table th,
+.cg-labels,
+.mode-chip-caption {
+  font-size: var(--text-xs);
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  color: var(--ink-2);
+}
+
+.audit-table th,
+.cg-labels {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* --- Frame --------------------------------------------------------------- */
+
+.app {
+  max-width: 1600px;
+  margin: 0 auto;
+  min-height: 100vh;
+  background: var(--paper);
+  display: flex;
+  flex-direction: column;
+}
+
+/* A shared bar for every panel heading, so the surface reads as one system. */
+.panel-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 2.75rem;
+  padding: 0 var(--pad-lg);
+  border-bottom: 1px solid var(--rule-soft);
+  background: var(--paper);
+}
+
+.tag {
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+  background: var(--panel-2);
+  padding: 0.1rem 0.4rem;
+}
+
+/* --- Toolbar ------------------------------------------------------------- */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-lg);
+  padding: 0.4rem var(--pad-lg);
+  min-height: 3.5rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+/* The mark is the same glyph as the favicon — an outlined gate with a red core
+   — so the browser tab and the header read as one identity. */
+.brand {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.brand-mark { flex: none; display: block; color: var(--ink); }
+
+.wordmark {
+  font-size: var(--text-base);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+
+/* The page's h1. Styled as a statement line rather than a display heading:
+   this is an operating surface, not a landing page. */
+.claim {
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+  font-size: var(--text-lg);
+  line-height: 1.35;
+  letter-spacing: -0.012em;
+  max-width: 72ch;
+  text-wrap: pretty;
+}
+
+/* --- Mode chip ----------------------------------------------------------- */
+
+.mode-chip {
+  flex: none;
+  /* Pinned to the trailing edge. The claim is capped at 72ch, so without this
+     the leftover track sits after the chip and leaves it stranded mid-bar. */
+  margin-left: auto;
+  border: 1px solid var(--rule);
+  padding: 0.35rem 0.75rem;
+  display: grid;
+  gap: 0.05rem;
+  transition: background-color 200ms ease-out, color 200ms ease-out;
+}
+
+.mode-chip-value {
+  font-family: var(--mono);
+  font-size: var(--text-base);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.mode-chip[data-mode='unread'] .mode-chip-value { font-family: var(--sans); }
+
+.mode-chip[data-mode='ENFORCE'] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.mode-chip[data-mode='ENFORCE'] .mode-chip-caption { color: #cfcfcc; }
+
+.mode-chip[data-mode='LOG_ONLY'] { background: var(--red); color: #fff; border-color: var(--red); }
+.mode-chip[data-mode='LOG_ONLY'] .mode-chip-caption { color: #fff; font-weight: 550; }
+
+/* --- Workspace ----------------------------------------------------------- */
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(17rem, 21rem) minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+
+.rig {
+  border-right: 1px solid var(--rule);
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* --- Scenario rack ------------------------------------------------------- */
+
+.scenarios { border-bottom: 1px solid var(--rule-soft); }
+.scenarios li + li { border-top: 1px solid var(--rule-soft); }
+
+.scenario {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 0.55rem var(--pad-lg);
+  text-align: left;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.1rem 0.6rem;
+  transition: background-color 150ms ease-out;
+}
+
+.scenario:hover { background: var(--panel-2); }
+
+.scenario-label {
+  font-size: var(--text-md);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* The rule is a data fragment, not a sentence — set in mono so it reads as
+   the policy it is and stays on one line beside the label. */
+.scenario-rule {
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.scenario[data-hostile='true'] .scenario-label::after {
+  content: 'injected';
+  margin-left: 0.4rem;
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--red-deep);
+}
+
+.scenario[aria-pressed='true'] { background: var(--ink); color: var(--paper); }
+.scenario[aria-pressed='true'] .scenario-rule { color: #cfcfcc; }
+.scenario[aria-pressed='true'][data-hostile='true'] .scenario-label::after { color: #ff8b9e; }
+
+/* --- Note field ---------------------------------------------------------- */
+
+.note-field {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 13rem;
+}
+
+textarea {
+  border: 0;
+  background: transparent;
+  /* No resize grip: the note field already flexes to fill its panel and the
+     composer is a fixed height, so the corner handle was pure visual noise. */
+  resize: none;
+  outline-offset: -3px;
+}
+
+.note-field textarea {
+  flex: 1;
+  min-height: 10rem;
+  padding: 0.75rem var(--pad-lg);
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  line-height: 1.65;
+}
+
+/* --- Console ------------------------------------------------------------- */
+
+.console {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  min-width: 0;
+}
+
+.ghost-button {
+  border: 1px solid var(--rule-soft);
+  background: var(--paper);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  padding: 0.3rem 0.7rem;
+  transition: border-color 150ms ease-out, background-color 150ms ease-out;
+}
+
+.ghost-button:hover:not(:disabled) { border-color: var(--rule); background: var(--panel-2); }
+.ghost-button:disabled { color: var(--ink-2); }
+
+.feed {
+  min-height: 22rem;
+  max-height: min(60vh, 34rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--pad-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+}
+
+.feed-empty {
+  margin: auto;
+  font-size: var(--text-base);
+  color: var(--ink-2);
+}
+
+.bubble { max-width: 100%; min-width: 0; }
+.bubble-who { margin-bottom: 0.25rem; }
+
+.bubble-text {
+  font-size: var(--text-base);
+  line-height: 1.5;
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+}
+
+.bubble.user {
+  align-self: flex-end;
+  max-width: 44rem;
+  background: var(--panel-2);
+  padding: 0.6rem 0.85rem;
+}
+
+.bubble.assistant { align-self: stretch; }
+
+/* --- Verdict card -------------------------------------------------------- */
+
+.verdict-card {
+  margin-top: 0.7rem;
+  border: 1px solid var(--rule);
+  background: var(--paper);
+  overflow: hidden;
+}
+
+.verdict-stage,
+.pending-stage {
+  padding: 0.7rem 0.5rem 0.3rem;
+  display: flex;
+  justify-content: center;
+  border-bottom: 1px solid var(--rule-soft);
+}
+
+.pending-stage {
+  border: 1px solid var(--rule-soft);
+  margin-top: 0.7rem;
+  padding-bottom: 0.5rem;
+}
+
+.cg-pipeline { width: 100%; max-width: 560px; }
+.cg-pipeline svg { display: block; width: 100%; height: auto; }
+
+.cg-rail { stroke: var(--ink); stroke-width: 2; }
+.cg-ghost { stroke: var(--rule-soft); stroke-width: 2; stroke-dasharray: 3 6; }
+.cg-packet { fill: var(--ink); }
+
+.cg-node { transform-box: fill-box; transform-origin: center; }
+.cg-node rect.cg-edge { fill: none; stroke: var(--ink); stroke-width: 2; }
+.cg-node rect.cg-gate-fill,
+.cg-node rect.cg-tool-fill { fill: var(--ink); stroke: none; }
+
+/* The tool node is only filled once a call actually reached it. */
+.cg-pipeline[data-state='pending'] .cg-node rect.cg-tool-fill,
+.cg-pipeline[data-state='blocked'] .cg-node rect.cg-tool-fill { opacity: 0; }
+.cg-pipeline[data-state='pending'] .cg-node rect.cg-gate-fill { opacity: 0; }
+
+.cg-break line { stroke: var(--red); stroke-width: 3; stroke-linecap: square; }
+
+.cg-labels { position: relative; height: 1.3em; margin-top: 0.1rem; }
+.cg-labels span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+
+.cg-pipeline[data-state='blocked'] .cg-node rect.cg-gate-fill,
+.cg-pipeline[data-state='unenforced'] .cg-node rect.cg-gate-fill { fill: var(--red); }
+.cg-pipeline[data-state='blocked'] .cg-node[data-node='tool'] rect.cg-edge { stroke: var(--rule-soft); }
+/* The unreached tool node is signalled by the dashed rail and hollow square,
+   not by fading its label below a readable contrast. */
+.cg-pipeline[data-state='blocked'] .cg-labels span:last-child { color: #6e6e6b; }
+.cg-pipeline[data-state='unenforced'] .cg-rail-b { stroke: var(--red); }
+.cg-pipeline[data-state='unenforced'] .cg-node rect.cg-tool-fill { fill: var(--red); }
+.cg-pipeline[data-state='pending'] .cg-rail-b { stroke: var(--rule-soft); }
+
+/* One line: the verdict, the exact call it applies to, and the mode that
+   decided it. Nothing here is restated anywhere else on the card. */
+.verdict-strip {
+  padding: 0.5rem var(--pad-lg);
+  border-bottom: 1px solid var(--rule);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
+}
+
+.verdict-word {
+  flex: none;
+  font-size: var(--text-xl);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  line-height: 1.15;
+}
+
+.verdict-call {
+  flex: 1 1 18ch;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  opacity: 0.85;
+}
+
+.verdict-mode {
+  flex: none;
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  border: 1px solid currentColor;
+  padding: 0.05rem 0.35rem;
+  opacity: 0.85;
+}
+
+.verdict-card[data-verdict='blocked'] .verdict-strip { background: var(--ink); color: var(--paper); }
+.verdict-card[data-verdict='unenforced'] .verdict-strip { background: var(--red); color: #fff; }
+
+[data-decision='DENY'] { color: var(--red-deep); }
+
+.verdict-reason {
+  padding: 0.55rem var(--pad-lg);
+  font-size: var(--text-md);
+  line-height: 1.45;
+  color: var(--ink-2);
+  text-wrap: pretty;
+}
+
+/* --- Composer ------------------------------------------------------------ */
+
+.composer {
+  border-top: 1px solid var(--rule);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.composer textarea {
+  min-height: 4.5rem;
+  padding: 0.8rem var(--pad-lg);
+  font-size: var(--text-base);
+  line-height: 1.45;
+}
+
+.composer button {
+  border: 0;
+  border-left: 1px solid var(--rule);
+  background: var(--red);
+  color: #fff;
+  padding: 0 1.4rem;
+  font-size: var(--text-md);
+  font-weight: 650;
+  min-height: 2.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  transition: background-color 150ms ease-out;
+}
+
+.composer button:hover:not(:disabled) { background: var(--red-deep); }
+.composer button:disabled { background: var(--ink-2); }
+
+kbd {
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  border: 1px solid rgb(255 255 255 / 0.55);
+  border-radius: 2px;
+  padding: 0.05rem 0.3rem;
+}
+
+.error {
+  border-top: 1px solid var(--red);
+  background: #fff4f6;
+  padding: 0.6rem var(--pad-lg);
+  font-size: var(--text-md);
+  line-height: 1.4;
+  color: var(--red-deep);
+}
+
+/* --- Audit trail --------------------------------------------------------- */
+
+.audit { border-top: 1px solid var(--rule); background: var(--paper); }
+
+.audit-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 1rem;
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+}
+
+.audit-empty {
+  padding: 1rem var(--pad-lg);
+  font-size: var(--text-md);
+  color: var(--ink-2);
+}
+
+.audit-scroll { overflow-x: auto; max-height: 18rem; overflow-y: auto; }
+
+.audit-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.audit-table th,
+.audit-table td {
+  text-align: left;
+  padding: 0.45rem var(--pad-lg);
+  border-bottom: 1px solid var(--rule-soft);
+  white-space: nowrap;
+}
+
+.audit-table th {
+  position: sticky;
+  top: 0;
+  background: var(--paper);
+  border-bottom: 1px solid var(--rule);
+}
+
+.audit-table td + td,
+.audit-table th + th { padding-left: 0.85rem; }
+
+.audit-table .num,
+.audit-table .mono { font-family: var(--mono); }
+.audit-table .mono { white-space: normal; min-width: 17ch; color: var(--ink-2); }
+.audit-table .outcome { font-weight: 650; }
+
+.audit-table tr[data-verdict='unenforced'] td { background: #fff4f6; }
+.audit-table tr[data-verdict='unenforced'] .outcome { color: var(--red-deep); }
+
+/* --- Motion -------------------------------------------------------------- */
+/* State feedback only — no page-load choreography. Resting states are correct
+   in CSS, so a stalled frame loop leaves content visible, never blank. */
+
+@keyframes card-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes row-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .verdict-card { animation: card-in 220ms cubic-bezier(0.16, 1, 0.3, 1) backwards; }
+  .audit-table tbody tr { animation: row-in 200ms cubic-bezier(0.16, 1, 0.3, 1) backwards; }
+}
+
+/* --- Responsive ---------------------------------------------------------- */
+
+@media (max-width: 1100px) {
+  /* Explicit areas rather than flex wrapping: the claim's 72ch cap kept the
+     whole bar fitting on one line, so a reorder alone stranded the chip
+     between the wordmark and the claim instead of pushing it to the edge. */
+  .toolbar {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-areas: 'brand mode' 'claim claim';
+    row-gap: 0.35rem;
+    padding-block: 0.6rem;
+  }
+  .brand { grid-area: brand; align-self: center; }
+  .mode-chip { grid-area: mode; margin-left: 0; }
+  .claim { grid-area: claim; max-width: none; font-size: var(--text-md); }
+  .workspace { grid-template-columns: 1fr; }
+  .rig { border-right: 0; border-bottom: 1px solid var(--rule); }
+  .note-field { min-height: 11rem; }
+  .note-field textarea { min-height: 8rem; }
+}
+
+@media (max-width: 680px) {
+  .composer { grid-template-columns: 1fr; }
+  .composer button { border-left: 0; border-top: 1px solid var(--rule); justify-content: center; padding: 0.8rem; }
+  .feed { max-height: none; }
+  .bubble.user { max-width: 100%; }
+  .mode-chip { flex: 1; }
+  .panel-bar { flex-wrap: wrap; padding-block: 0.4rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
