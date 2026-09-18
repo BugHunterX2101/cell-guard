@@ -99,7 +99,7 @@ flowchart TB
     style Cedar fill:#fff3cd,stroke:#c9a227
 ```
 
-No Lambda calls another tool Lambda directly, and no Lambda holds an IAM permission it doesn't use. The gateway's own AWS permissions never grant the risky actions — Cedar's decision is the gate, evaluated in-process with no network hop.
+No Lambda calls another tool Lambda directly, and no Lambda holds an IAM permission it doesn't use. The gateway's own AWS permissions never grant the risky actions — Cedar's decision is the gate, evaluated in-process with no network hop. The two slices are fully isolated at the resource level too: `cellguard-gateway-*` (Person B) vs. `cellguard-agent-*` (Person A) — no shared Lambda, no shared IAM role, no shared DynamoDB table. `POST /invoke-tool` is the only integration point between them.
 
 > **Why embedded Cedar, not Amazon Verified Permissions?** The PRD calls for AVP; this deployment runs the same Cedar engine embedded directly in the gateway Lambda instead, because AVP is blocked account-wide on the hackathon-provisioned AWS account this was built against. Full story, verification steps, and the exact error signature: [`gateway-policy/README.md`](./gateway-policy/README.md#why-embedded-cedar-not-amazon-verified-permissions).
 
@@ -145,6 +145,9 @@ The injected-expense-approval row is the one worth reading twice: in LOG_ONLY, t
 ---
 
 ## File structure
+
+<details>
+<summary>Full directory tree (click to expand)</summary>
 
 ```
 cell-guard/
@@ -223,28 +226,7 @@ cell-guard/
             └── AuditTrail.tsx                        — session-scoped attempt history
 ```
 
----
-
-## Repo layout
-
-Split along the one real seam in the architecture: the agent doesn't need to know how the gateway enforces policy, and the gateway doesn't need to know how the agent thinks. Both sides build against the same locked `/invoke-tool` contract and nothing else.
-
-```mermaid
-flowchart LR
-    A["agent-frontend/<br/><i>Person A — built</i><br/>Bedrock agent, chat UI,<br/>injected-attack payload"]
-    B["gateway-policy/<br/><i>Person B — deployed</i><br/>Cedar policies, gateway Lambda,<br/>3 tool Lambdas, audit log"]
-    A <-->|"POST /invoke-tool<br/>(the only integration point)"| B
-
-    style A fill:#eafbea,stroke:#2e7d32
-    style B fill:#eafbea,stroke:#2e7d32
-```
-
-| Folder | Owner | Status | Docs |
-|---|---|---|---|
-| [`gateway-policy/`](./gateway-policy/) | Person B | Deployed & verified | [README](./gateway-policy/README.md) |
-| [`agent-frontend/`](./agent-frontend/) | Person A | Built, wired to the real gateway | [README](./agent-frontend/README.md) |
-
-Resource naming keeps the two sides fully isolated: `cellguard-gateway-*` (Person B) vs. `cellguard-agent-*` (Person A) — no shared Lambda, no shared IAM role, no shared DynamoDB table.
+</details>
 
 ---
 
@@ -283,23 +265,8 @@ Full prerequisites, the exact `/invoke-tool` contract, the 5 Cedar policies, and
 
 ---
 
-## Project status
-
-- [x] Cedar schema + 5 policies (threshold + unconditional-forbid rules), validated against the real Cedar engine
-- [x] Gateway Lambda enforcing the `/invoke-tool` contract, fail-closed on any internal error
-- [x] 3 tool Lambdas, each least-privilege (only the DynamoDB verb it uses, on one table)
-- [x] Audit log capturing every attempt — Cedar's decision, the effective decision, mode, and reason
-- [x] `LOG_ONLY` <-> `ENFORCE` switchable live, with no redeploy and no risk of a redeploy silently resetting it
-- [x] Deployed to AWS and verified end-to-end (both modes, all 7 test cases, zero errors in CloudWatch)
-- [x] Bedrock Converse agent + tool-calling, wired to the real gateway contract (Person A)
-- [x] Chat UI + live mode indicator + audit trail (Person A)
-- [x] Injected-attack payload (4 scenarios) + integration swap onto the real gateway
-- [x] Chat UI hosted publicly (S3 + CloudFront, private origin via OAC) and verified end-to-end
-- [ ] 3-minute demo video
-- [ ] Builder Center blog post
-
----
-
 ## Built for First Commit
 
 Cell-Guard is being built for [**First Commit**](https://www.wemakedevs.org/aws/first-commit) — a 4-day AWS hackathon (Ship It track). Full requirements and rationale: [`Cell-Guard — Product Requirements Document.pdf`](./Cell-Guard%20%E2%80%94%20Product%20Requirements%20Document.pdf).
+
+Both slices are built, deployed, and verified end-to-end on real AWS infrastructure. What's left is external to the code: a 3-minute demo video and a Builder Center write-up.
