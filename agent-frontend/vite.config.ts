@@ -11,7 +11,9 @@ import react from '@vitejs/plugin-react'
  * reachable locally. It never ships: `apply: 'serve'` keeps it out of builds,
  * and the deployed UI talks to VITE_AGENT_API_URL instead.
  *
- * Flip the mode it reports with LOCAL_MODE=ENFORCE npm run dev.
+ * Flip the mode it reports with LOCAL_MODE=ENFORCE npm run dev, or live via
+ * GET/POST /mode (the same endpoint shape the deployed gateway exposes),
+ * which is what the UI's mode-flip button actually calls.
  */
 const EXPENSE_LIMIT = 500
 const WIRE_LIMIT = 1000
@@ -65,10 +67,43 @@ function evaluate(tool: Tool, params: Record<string, string | number>): ['ALLOW'
 }
 
 function localAgent(): Plugin {
+  // Mutable so the frontend's mode-flip button works in dev too, not just
+  // against the deployed gateway. Seeded from LOCAL_MODE for the old
+  // env-var-only workflow, then live-editable via GET/POST /mode below.
+  let localMode: 'LOG_ONLY' | 'ENFORCE' = process.env.LOCAL_MODE === 'ENFORCE' ? 'ENFORCE' : 'LOG_ONLY'
+
   return {
     name: 'cellguard-local-agent',
     apply: 'serve',
     configureServer(server) {
+      server.middlewares.use('/mode', (req, res) => {
+        res.setHeader('Content-Type', 'application/json')
+
+        if (req.method === 'GET') {
+          res.end(JSON.stringify({ mode: localMode }))
+          return
+        }
+
+        if (req.method === 'POST') {
+          const chunks: Buffer[] = []
+          req.on('data', (chunk) => chunks.push(chunk))
+          req.on('end', () => {
+            const body = JSON.parse(Buffer.concat(chunks).toString() || '{}')
+            if (body.mode !== 'LOG_ONLY' && body.mode !== 'ENFORCE') {
+              res.statusCode = 400
+              res.end(JSON.stringify({ error: 'mode must be LOG_ONLY or ENFORCE' }))
+              return
+            }
+            localMode = body.mode
+            res.end(JSON.stringify({ mode: localMode }))
+          })
+          return
+        }
+
+        res.statusCode = 405
+        res.end(JSON.stringify({ error: 'Method not allowed' }))
+      })
+
       server.middlewares.use('/chat', (req, res, next) => {
         if (req.method !== 'POST') return next()
 
@@ -78,7 +113,7 @@ function localAgent(): Plugin {
           const body = JSON.parse(Buffer.concat(chunks).toString() || '{}')
           const combined = `${body.message ?? ''}\n${body.customer_note ?? ''}`
           const call = chooseToolCall(combined)
-          const mode = process.env.LOCAL_MODE === 'ENFORCE' ? 'ENFORCE' : 'LOG_ONLY'
+          const mode = localMode
 
           res.setHeader('Content-Type', 'application/json')
 

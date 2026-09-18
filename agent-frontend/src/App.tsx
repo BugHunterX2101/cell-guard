@@ -4,7 +4,7 @@ import VerdictCard from './components/VerdictCard'
 import ModeBadge from './components/ModeBadge'
 import AuditTrail, { type AuditEntry } from './components/AuditTrail'
 import { SCENARIOS, type Scenario } from './scenarios'
-import { sendChat, TOOL_LABELS, type Mode, type ToolAttempt } from './api'
+import { sendChat, getMode, setMode as apiSetMode, TOOL_LABELS, type Mode, type ToolAttempt } from './api'
 
 type Message = {
   id: string
@@ -28,9 +28,39 @@ export default function App() {
   const [messages, setMessages] = useState<Message[]>([])
   const [entries, setEntries] = useState<AuditEntry[]>([])
   const [mode, setMode] = useState<Mode | null>(null)
+  const [modePending, setModePending] = useState(false)
   const [pendingTool, setPendingTool] = useState<string>('a tool')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+
+  /**
+   * Read the real current mode as soon as the page loads, rather than
+   * leaving the badge on "Mode unread" until the first chat message
+   * returns one. Calls the gateway directly (see api.ts) — never the agent
+   * — so this is accurate even before anyone has typed anything. A failed
+   * read just leaves the badge unread; it never blocks the rest of the UI.
+   */
+  useEffect(() => {
+    const controller = new AbortController()
+    getMode(controller.signal)
+      .then(setMode)
+      .catch(() => {})
+    return () => controller.abort()
+  }, [])
+
+  async function flipMode() {
+    if (mode === null || modePending) return
+    const next: Mode = mode === 'ENFORCE' ? 'LOG_ONLY' : 'ENFORCE'
+    setModePending(true)
+    setError('')
+    try {
+      setMode(await apiSetMode(next))
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not change the mode. Try again.')
+    } finally {
+      setModePending(false)
+    }
+  }
 
   /**
    * Keep the newest verdict card fully in view. A verdict card is much taller
@@ -145,7 +175,7 @@ export default function App() {
           <h1 className="claim">
             Cedar policy checks every tool call before it runs — the model can’t talk past it.
           </h1>
-          <ModeBadge mode={mode} />
+          <ModeBadge mode={mode} onToggle={flipMode} pending={modePending} />
         </header>
 
         <div className="workspace">

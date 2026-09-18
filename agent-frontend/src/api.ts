@@ -52,6 +52,31 @@ export const TOOL_LABELS: Record<ToolName, string> = {
 
 const endpoint = import.meta.env.VITE_AGENT_API_URL || '/chat'
 
+// The gateway's own /mode endpoint (see gateway-policy/template.yaml's
+// ModeControlFunction) — a different origin than the agent chat endpoint
+// above, called directly from the browser rather than through the agent, so
+// flipping the mode is never something the model is in the loop for.
+const modeEndpoint = import.meta.env.VITE_GATEWAY_MODE_URL || '/mode'
+
+export async function getMode(signal?: AbortSignal): Promise<Mode> {
+  const response = await fetch(modeEndpoint, { signal })
+  if (!response.ok) throw new Error('Could not read the current mode.')
+  const body = (await response.json()) as { mode: Mode }
+  return body.mode
+}
+
+export async function setMode(mode: Mode, signal?: AbortSignal): Promise<Mode> {
+  const response = await fetch(modeEndpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal,
+    body: JSON.stringify({ mode }),
+  })
+  if (!response.ok) throw new Error('Could not change the mode.')
+  const body = (await response.json()) as { mode: Mode }
+  return body.mode
+}
+
 export async function sendChat(
   message: string,
   customerNote: string,

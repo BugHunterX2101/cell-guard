@@ -17,6 +17,13 @@ then swap in Person B's `InvokeToolUrl`.
 The UI generates one `session_id` per page load and sends it with every request,
 so all attempts from a demo run group together in the gateway's audit table.
 
+The mode chip (top right) is a real button, not just a status readout: it
+calls the gateway's own `GET`/`POST /mode` endpoint (`VITE_GATEWAY_MODE_URL`)
+directly from the browser — never through the agent or the model. That's
+deliberate: the whole premise of Cell-Guard is that enforcement isn't
+something the model has a say in, so the one control that changes enforcement
+can't be reachable through the model's own request path either.
+
 ## Design direction
 
 A Swiss editorial system: white ground, hairline black rules, self-hosted
@@ -178,16 +185,19 @@ of the path entirely.
 ## Demo path
 
 The gateway mode is on screen at all times, top right, so the flip is legible in
-a recording.
+a recording — and it's a real button now, not just a readout, so the whole
+demo below runs without ever cutting away to a terminal.
 
 1. **Routine Reimbursement** — $125 approval. Cedar ALLOW, tool runs,
    `Permitted`. This is the happy path at 0:20–0:50.
 2. **Injected Over-Limit Approval** in LOG_ONLY — the note hides an instruction
    to approve $900. The card shows Cedar DENY against `amount=900` and the tool
    running anyway: `Unenforced`. This is "here's the gap" at 0:50–1:30.
-3. Flip Person B's mode to ENFORCE (`gateway-policy/scripts/set-mode.sh
-   ENFORCE`) and send **the exact same note**. Same `amount=900`, now `Blocked`,
-   rail severed at the gateway. This is the centerpiece at 1:30–2:15.
+3. Click the mode chip to flip to ENFORCE and send **the exact same note**.
+   Same `amount=900`, now `Blocked`, rail severed at the gateway. This is the
+   centerpiece at 1:30–2:15. (Still scriptable from a terminal instead —
+   `gateway-policy/scripts/set-mode.sh ENFORCE` — if you'd rather not show the
+   click on screen.)
 4. **Injected Record Deletion** and **Injected Wire Transfer** put the other two
    tools through the same path, so the audit trail shows all three with their
    Cedar decision and whether they executed.

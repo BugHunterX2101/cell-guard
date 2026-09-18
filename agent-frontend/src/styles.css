@@ -188,12 +188,21 @@ button:disabled { cursor: not-allowed; }
   /* Pinned to the trailing edge. The claim is capped at 72ch, so without this
      the leftover track sits after the chip and leaves it stranded mid-bar. */
   margin-left: auto;
+  /* Now a <button>: reset the browser's own button chrome so the unread and
+     pending states (neither sets its own background below) show the plain
+     paper background instead of default button face/border/centering. */
+  background: var(--paper);
+  text-align: left;
   border: 1px solid var(--rule);
   padding: 0.35rem 0.75rem;
   display: grid;
   gap: 0.05rem;
-  transition: background-color 200ms ease-out, color 200ms ease-out;
+  transition: background-color 200ms ease-out, color 200ms ease-out, opacity 150ms ease-out;
 }
+
+.mode-chip:hover:not(:disabled) { border-color: var(--ink); }
+.mode-chip:disabled { cursor: progress; opacity: 0.85; }
+.mode-chip[data-mode='unread']:disabled { cursor: wait; opacity: 0.6; }
 
 .mode-chip-value {
   font-family: var(--mono);

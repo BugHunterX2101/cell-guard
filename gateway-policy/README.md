@@ -21,14 +21,18 @@ https://uh8orn4o0d.execute-api.us-east-1.amazonaws.com/prod/invoke-tool
 ```mermaid
 flowchart TB
     Caller(["Agent (Person A)<br/>or curl/Postman"])
-    APIGW["API Gateway (HTTP API)<br/>POST /invoke-tool"]
+    UIButton(["Chat UI mode chip<br/>(browser, direct)"])
+    APIGW["API Gateway (HTTP API)<br/>POST /invoke-tool  ·  GET/POST /mode"]
     GWFn["cellguard-gateway-invoke-tool"]
+    ModeFn["cellguard-gateway-mode-control"]
     Cedar["Embedded Cedar engine (cedarpy)<br/>schema.json + 5 policies<br/>staged by scripts/prepare_policies.py,<br/>parsed once at cold start (common/engine.py)"]
     Mode[("SSM Parameter<br/>/cellguard/gateway/mode<br/>LOG_ONLY | ENFORCE")]
 
     Caller -->|the only path in| APIGW --> GWFn
+    UIButton -->|"GET/POST /mode — never through the agent"| APIGW --> ModeFn
     GWFn <-->|"in-process, no network hop"| Cedar
     GWFn -.->|reads fresh every request| Mode
+    ModeFn -.->|reads + writes, scoped to this parameter only| Mode
 
     subgraph Tools["invoked only if effective decision is ALLOW"]
         T1["approve_expense"]
@@ -213,10 +217,16 @@ every request — no caching, so a flip takes effect on the very next call.
   the demo show the identical attack payload succeed in one mode and get
   blocked in the other.
 
-Flip it live:
+Flip it live from a terminal:
 ```bash
 scripts/set-mode.sh ENFORCE
 scripts/set-mode.sh LOG_ONLY
+```
+
+Or from the deployed chat UI itself — the mode chip in the top-right corner is a real button, not just a status readout, backed by a dedicated `GET`/`POST /mode` route on this same API (`cellguard-gateway-mode-control`, see below). No terminal needed during a demo recording:
+```bash
+curl https://<InvokeToolUrl base>/mode                              # read
+curl -X POST https://<InvokeToolUrl base>/mode -H "Content-Type: application/json" -d '{"mode":"ENFORCE"}'
 ```
 
 ## Deploy
@@ -327,6 +337,7 @@ itself.
 | `cellguard-gateway-approve-expense` | `dynamodb:PutItem` on the app-data table only |
 | `cellguard-gateway-delete-customer-record` | `dynamodb:DeleteItem` + `dynamodb:PutItem` on the app-data table only |
 | `cellguard-gateway-send-wire-transfer` | `dynamodb:PutItem` on the app-data table only |
+| `cellguard-gateway-mode-control` | `ssm:GetParameter` + `ssm:PutParameter` on the mode parameter only — kept as its own function specifically so `cellguard-gateway-invoke-tool` never needs write access to the mode it enforces |
 
 None of the tool Lambdas can be reached except by the gateway Lambda's
 explicit `InvokeFunction` grant — there is no API Gateway route to them

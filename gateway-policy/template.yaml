@@ -169,15 +169,64 @@ Resources:
             Path: /invoke-tool
             Method: POST
 
+  # ---------------------------------------------------------------------
+  # Mode-control Lambda — a single-purpose sibling to GatewayFunction, kept
+  # separate rather than added as a route on GatewayFunction so that the
+  # core enforcement Lambda's own IAM role never needs ssm:PutParameter.
+  # GatewayFunction only ever reads the mode; only this function writes it.
+  # ---------------------------------------------------------------------
+  ModeControlFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: cellguard-gateway-mode-control
+      CodeUri: src/mode_control/
+      Handler: app.handler
+      Environment:
+        Variables:
+          MODE_PARAMETER_NAME: !Ref ModeParameterName
+      Policies:
+        - Statement:
+            - Sid: ReadWriteModeParameterOnly
+              Effect: Allow
+              Action:
+                - ssm:GetParameter
+                - ssm:PutParameter
+              Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ModeParameterName}"
+      Events:
+        GetMode:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /mode
+            Method: GET
+        SetMode:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /mode
+            Method: POST
+
   HttpApi:
     Type: AWS::Serverless::HttpApi
     Properties:
       StageName: prod
+      CorsConfiguration:
+        # /invoke-tool never needed browser CORS (called server-to-server by
+        # the agent, or via curl/Postman) — this is here for /mode, so the
+        # deployed chat UI can flip the mode directly from the browser. Purely
+        # additive: CORS only affects what a browser will let JS read from
+        # the response, never what curl/Postman/the agent can already do.
+        AllowOrigins: ["*"]
+        AllowMethods: ["GET", "POST", "OPTIONS"]
+        AllowHeaders: ["content-type"]
 
 Outputs:
   InvokeToolUrl:
     Description: The contract endpoint — POST requests here per the agent/gateway contract.
     Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/prod/invoke-tool"
+  ModeUrl:
+    Description: GET to read the current mode, POST {"mode":"ENFORCE"|"LOG_ONLY"} to flip it live.
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/prod/mode"
   AuditLogTableName:
     Value: !Ref AuditLogTable
   AppDataTableName:
