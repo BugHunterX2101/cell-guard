@@ -44,7 +44,16 @@ Resources:
       Policies:
         - Statement:
             - Effect: Allow
-              Action: bedrock:Converse
+              # The bedrock-runtime Converse API is authorized via the
+              # InvokeModel action, not a same-named Converse action —
+              # confirmed against the real service (an InvokeModel-only
+              # AccessDeniedException was returned when only bedrock:Converse
+              # was granted). ConverseStream/InvokeModelWithResponseStream
+              # are included for parity even though this Lambda calls the
+              # non-streaming Converse operation.
+              Action:
+                - bedrock:InvokeModel
+                - bedrock:InvokeModelWithResponseStream
               Resource: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${BedrockModelId}
       Events:
         Chat:

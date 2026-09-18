@@ -61,6 +61,20 @@ To point the UI at a deployed agent instead, set `VITE_AGENT_API_URL` to the
 
 ## Deploy the agent
 
+Already deployed and verified end-to-end against the real gateway:
+
+```
+https://hji9tqdwa3.execute-api.us-east-1.amazonaws.com/chat
+```
+
+```bash
+curl -X POST https://hji9tqdwa3.execute-api.us-east-1.amazonaws.com/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message":"Approve a $125 reimbursement for EMP-1048.","session_id":"try-it"}'
+```
+
+To redeploy or stand up your own copy:
+
 ```bash
 cd agent-frontend
 bash scripts/deploy.sh
@@ -76,6 +90,13 @@ bash scripts/deploy.sh
 The default model is `amazon.nova-lite-v1:0`; change `BedrockModelId` only if
 that model is unavailable in the chosen region. Host the `npm run build` output
 (`dist/`) on Amplify Hosting or S3 + CloudFront.
+
+**IAM gotcha found during deployment:** the Bedrock `Converse` API is
+authorized by the `bedrock:InvokeModel` action, not a same-named `Converse`
+action — granting only `bedrock:Converse` produces an `AccessDeniedException`
+naming `bedrock:InvokeModel` as the missing permission. `template.yaml`
+already grants the right action; this is here so nobody re-discovers it by
+trial and error.
 
 The in-stack mock reports `LOG_ONLY` by default and honours a `MockMode`
 parameter, so the flip is rehearsable before Person B's stack exists. Once
