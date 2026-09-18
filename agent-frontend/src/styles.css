@@ -318,6 +318,12 @@ textarea {
   font-size: var(--text-xs);
   font-weight: 600;
   padding: 0.3rem 0.7rem;
+  /* min-height keeps the actual tap target at the 44px accessibility
+     minimum without inflating the visible text/border — display:flex
+     centers the small label within the taller box instead of stretching it. */
+  min-height: 2.75rem;
+  display: inline-flex;
+  align-items: center;
   transition: border-color 150ms ease-out, background-color 150ms ease-out;
 }
 
