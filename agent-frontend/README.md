@@ -101,18 +101,67 @@ API directly:
 https://d3qtm29nnnxwhw.cloudfront.net
 ```
 
+**First-time setup**, for standing up your own copy (skip straight to
+"rebuild and redeploy" below if the bucket and distribution already exist):
+
+```bash
+# 1. A private bucket — never enable public access or a public bucket policy.
+BUCKET="cellguard-agent-ui-<your-account-id>"
+aws s3api create-bucket --bucket "$BUCKET" --region us-east-1
+
+# 2. An Origin Access Control, so only CloudFront can read the bucket.
+echo '{"Name":"cellguard-agent-ui-oac","SigningProtocol":"sigv4","SigningBehavior":"always","OriginAccessControlOriginType":"s3"}' > oac-config.json
+aws cloudfront create-origin-access-control --origin-access-control-config file://oac-config.json
+# note the returned OAC "Id"
+
+# 3. A CloudFront distribution using that OAC, with the S3 origin and a
+# 403->200 /index.html fallback (S3 returns 403, not 404, for a missing key
+# under OAC). CachePolicyId here is AWS's managed "CachingOptimized" policy.
+echo '{"CallerReference":"cellguard-agent-ui-1","Comment":"Cell-Guard agent chat UI","DefaultRootObject":"index.html","Enabled":true,"Origins":{"Quantity":1,"Items":[{"Id":"s3-origin","DomainName":"'"$BUCKET"'.s3.us-east-1.amazonaws.com","OriginAccessControlId":"<OAC Id from step 2>","S3OriginConfig":{"OriginAccessIdentity":""}}]},"DefaultCacheBehavior":{"TargetOriginId":"s3-origin","ViewerProtocolPolicy":"redirect-to-https","AllowedMethods":{"Quantity":2,"Items":["GET","HEAD"]},"CachePolicyId":"658327ea-f89d-4fab-a63d-7e88639e58f6"},"CustomErrorResponses":{"Quantity":1,"Items":[{"ErrorCode":403,"ResponsePagePath":"/index.html","ResponseCode":"200","ErrorCachingMinTTL":10}]}}' > dist-config.json
+aws cloudfront create-distribution --distribution-config file://dist-config.json
+# note the returned distribution "Id" and "DomainName"
+
+# 4. A bucket policy readable only by that exact distribution — scope to its
+# ARN (AWS:SourceArn), not just the account, so no other distribution in the
+# account (now or later) can read this bucket.
+echo '{"Version":"2012-10-17","Statement":[{"Sid":"AllowCloudFrontServicePrincipal","Effect":"Allow","Principal":{"Service":"cloudfront.amazonaws.com"},"Action":"s3:GetObject","Resource":"arn:aws:s3:::'"$BUCKET"'/*","Condition":{"StringEquals":{"AWS:SourceArn":"arn:aws:cloudfront::<account-id>:distribution/<distribution Id from step 3>"}}}]}' > bucket-policy.json
+aws s3api put-bucket-policy --bucket "$BUCKET" --policy file://bucket-policy.json
+rm oac-config.json dist-config.json bucket-policy.json
+```
+
 To rebuild and redeploy it: Vite inlines `VITE_*` variables into the bundle
 at build time, not read at runtime, so the env var has to be set at build
 time — setting it only in `.env.local` (which only affects `npm run dev`) or
-after the build has no effect on what ships:
+after the build has no effect on what ships. Vite also content-hashes every
+JS/CSS filename but leaves `index.html`'s name unchanged, so the two need
+different cache lifetimes — hashed assets can be cached forever (a new build
+gets a new filename), but `index.html` must never be cached, or CloudFront
+can keep serving visitors an old `index.html` that points at asset filenames
+a later `--delete` sync already removed, producing 404s until the cache
+expires:
 
 ```bash
 VITE_AGENT_API_URL="https://hji9tqdwa3.execute-api.us-east-1.amazonaws.com/chat" npm run build
-aws s3 sync dist s3://cellguard-agent-ui-162599956323/ --delete
+
+# Hashed assets: safe to cache forever, and `cp` (not `sync`) is required —
+# sync skips re-uploading files whose content is unchanged, which would also
+# skip applying new/changed --cache-control metadata to them.
+aws s3 cp dist/assets s3://cellguard-agent-ui-162599956323/assets --recursive \
+  --cache-control "public, max-age=31536000, immutable"
+
+# index.html: never cached, so every visitor always gets the current pointer.
+aws s3 cp dist/index.html s3://cellguard-agent-ui-162599956323/index.html \
+  --cache-control "no-cache, no-store, must-revalidate" --content-type "text/html"
+
+# Remove any now-orphaned old-hashed assets, then invalidate so the change
+# is live immediately instead of waiting out CloudFront's cache.
+aws s3 sync dist/assets s3://cellguard-agent-ui-162599956323/assets --delete
+aws cloudfront create-invalidation --distribution-id ELX0TXCLD81JW --paths "/*"
 ```
 
 (An Amplify Hosting setup is an equally valid alternative to the S3 +
-CloudFront + OAC approach used here.)
+CloudFront + OAC approach used here, and handles this cache-lifetime split
+automatically.)
 
 **IAM gotcha found during deployment:** the Bedrock `Converse` API is
 authorized by the `bedrock:InvokeModel` action, not a same-named `Converse`
