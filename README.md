@@ -269,4 +269,4 @@ Full prerequisites, the exact `/invoke-tool` contract, the 5 Cedar policies, and
 
 Cell-Guard is being built for [**First Commit**](https://www.wemakedevs.org/aws/first-commit) — a 4-day AWS hackathon (Ship It track). Full requirements and rationale: [`Cell-Guard — Product Requirements Document.pdf`](./Cell-Guard%20%E2%80%94%20Product%20Requirements%20Document.pdf).
 
-Both slices are built, deployed, and verified end-to-end on real AWS infrastructure. What's left is external to the code: a 3-minute demo video and a Builder Center write-up.
+Both slices are built, deployed, and verified end-to-end on real AWS infrastructure.
