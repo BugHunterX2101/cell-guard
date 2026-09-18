@@ -110,9 +110,12 @@ No Lambda calls another tool Lambda directly, and no Lambda holds an IAM permiss
 Both slices are deployed on AWS (`us-east-1`) and verified end-to-end through the real Bedrock agent — not just direct gateway calls:
 
 ```
-Gateway (Person B):  https://uh8orn4o0d.execute-api.us-east-1.amazonaws.com/prod/invoke-tool
+Chat UI (Person A):    https://d3qtm29nnnxwhw.cloudfront.net
 Agent chat (Person A): https://hji9tqdwa3.execute-api.us-east-1.amazonaws.com/chat
+Gateway (Person B):    https://uh8orn4o0d.execute-api.us-east-1.amazonaws.com/prod/invoke-tool
 ```
+
+Open the Chat UI link — it's the actual clickable demo, wired end-to-end to the deployed agent and gateway, not a mock. It's served from a private S3 bucket behind CloudFront (Origin Access Control only; direct S3 access returns 403), and the JS bundle has the real `AgentApiUrl` baked in at build time (see the Vite gotcha in [`agent-frontend/README.md`](./agent-frontend/README.md#deploy-the-agent)).
 
 Try the gateway directly, no agent required:
 ```bash
@@ -291,6 +294,7 @@ Full prerequisites, the exact `/invoke-tool` contract, the 5 Cedar policies, and
 - [x] Bedrock Converse agent + tool-calling, wired to the real gateway contract (Person A)
 - [x] Chat UI + live mode indicator + audit trail (Person A)
 - [x] Injected-attack payload (4 scenarios) + integration swap onto the real gateway
+- [x] Chat UI hosted publicly (S3 + CloudFront, private origin via OAC) and verified end-to-end
 - [ ] 3-minute demo video
 - [ ] Builder Center blog post
 

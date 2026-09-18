@@ -92,16 +92,27 @@ bash scripts/deploy.sh
 The default model is `amazon.nova-lite-v1:0`; change `BedrockModelId` only if
 that model is unavailable in the chosen region.
 
-To host the static UI itself (Amplify Hosting or S3 + CloudFront), build it
-with the deployed `AgentApiUrl` baked in — Vite inlines `VITE_*` variables
-into the bundle at build time, not read at runtime, so setting the env var
-after the build (or only in `.env.local` for `npm run dev`) has no effect on
-what ships:
+The static chat UI itself is deployed too — a private S3 bucket behind
+CloudFront (Origin Access Control only, no public bucket policy: direct S3
+access returns 403), verified end-to-end from the public URL, not just the
+API directly:
+
+```
+https://d3qtm29nnnxwhw.cloudfront.net
+```
+
+To rebuild and redeploy it: Vite inlines `VITE_*` variables into the bundle
+at build time, not read at runtime, so the env var has to be set at build
+time — setting it only in `.env.local` (which only affects `npm run dev`) or
+after the build has no effect on what ships:
 
 ```bash
 VITE_AGENT_API_URL="https://hji9tqdwa3.execute-api.us-east-1.amazonaws.com/chat" npm run build
-# then upload dist/ to Amplify Hosting or S3 + CloudFront
+aws s3 sync dist s3://cellguard-agent-ui-162599956323/ --delete
 ```
+
+(An Amplify Hosting setup is an equally valid alternative to the S3 +
+CloudFront + OAC approach used here.)
 
 **IAM gotcha found during deployment:** the Bedrock `Converse` API is
 authorized by the `bedrock:InvokeModel` action, not a same-named `Converse`
